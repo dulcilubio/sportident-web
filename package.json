@@ -33,7 +33,11 @@
   },
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "git+https://github.com/dulcilubio/sportident-web.git"
+  },
+  "homepage": "https://github.com/dulcilubio/sportident-web#readme",
+  "bugs": {
+    "url": "https://github.com/dulcilubio/sportident-web/issues"
   },
   "types": "./src/index.d.ts"
 }
