@@ -322,6 +322,26 @@
       </section>
 
       <section>
+        <h2>Punch handling</h2>
+        <p class="hint">
+          The station can do one or the other, not both: the hardware ties
+          handshake and auto-send together as opposites.
+        </p>
+        <div class="stack">
+          <label class="toggle">
+            <input type="radio" name="punchMode" value="readout" checked disabled />
+            Read cards on insertion <em>(handshake)</em>
+          </label>
+          <label class="toggle">
+            <input type="radio" name="punchMode" value="autosend" disabled />
+            Send punches live <em>(auto-send)</em>
+          </label>
+          <p class="hint" id="punchModeNote"></p>
+          <button id="detectCard" disabled>Read the card that is in now</button>
+        </div>
+      </section>
+
+      <section>
         <h2>Set up</h2>
         <div class="stack">
           <button id="beep" disabled>Beep the station</button>

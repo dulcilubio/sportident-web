@@ -21,8 +21,13 @@
 
 import { toInt } from './bytes.js';
 import { CARD, CMD, MODE, P_SI6_CB } from './constants.js';
-import { SIProtocolError } from './errors.js';
-import { cardTypeFromDetect, decodeCardData, decodeCardNumber } from './protocol.js';
+import { SINakError, SIProtocolError, SITimeoutError } from './errors.js';
+import {
+  cardTypeFromDetect,
+  cardTypeFromNumber,
+  decodeCardData,
+  decodeCardNumber,
+} from './protocol.js';
 import { SIStation } from './station.js';
 
 export class SIReadout extends SIStation {
@@ -32,17 +37,41 @@ export class SIReadout extends SIStation {
    * @param {boolean} [options.autoRead] read and acknowledge cards as they are
    *   inserted, default true
    * @param {boolean} [options.autoAck] beep after a successful read, default true
+   * @param {boolean} [options.detectOnConnect] look for a card that is already
+   *   in the station when connecting, default true
    */
   constructor(transport, options = {}) {
     super(transport, options);
     this.autoRead = options.autoRead ?? true;
     this.autoAck = options.autoAck ?? true;
+    this.detectOnConnect = options.detectOnConnect ?? true;
 
     /** Number of the card currently in the station, or null. */
     this.cardNumber = null;
     /** Data layout of the card currently in the station, or null. */
     this.cardType = null;
     this.busy = false;
+  }
+
+  /**
+   * Connect, then look for a card that is already sitting in the station.
+   *
+   * Without this, connecting to a station that already holds a card reads as a
+   * fault: everything is configured correctly and nothing happens, because the
+   * announcement went out before anyone was listening.
+   */
+  async connect(options = {}) {
+    await super.connect(options);
+    if (!this.detectOnConnect) return;
+    if (this.protoConfig?.mode !== MODE.READOUT) return;
+
+    try {
+      await this.detectCard();
+    } catch (error) {
+      // Probing is a convenience. A station that will not answer it is still
+      // perfectly usable for cards inserted from now on.
+      this.dispatchEvent(new CustomEvent('detectFailed', { detail: { error } }));
+    }
   }
 
   /** Throws unless the station can actually read cards. */
@@ -103,6 +132,90 @@ export class SIReadout extends SIStation {
       default:
         super.handleUnsolicited(frame);
     }
+  }
+
+  /**
+   * Ask the station whether a card is sitting in it right now.
+   *
+   * Stations announce a card when it goes in, and nothing afterwards. A card
+   * already in the slot when the page connects is therefore invisible, which
+   * looks exactly like a broken readout: the station is in the right mode, the
+   * card is in, and nothing happens. This probes for one instead of waiting.
+   *
+   * The probe is a real read of the first block, because there is no "is
+   * anything there" command. A station with an empty slot answers NAK, which is
+   * not an error here.
+   *
+   * @param {object} [options]
+   * @param {boolean} [options.read] read and emit the card as if it had just
+   *   been inserted, subject to autoRead. Default true.
+   * @returns {Promise<{cardNumber: number, cardType: string}|null>}
+   */
+  async detectCard({ read = true } = {}) {
+    this.assertReadoutMode();
+    if (this.busy) return null;
+
+    const found = await this.#probeForCard();
+    if (!found) return null;
+
+    this.cardNumber = found.cardNumber;
+    this.cardType = found.cardType;
+    if (read) this.#cardInserted();
+    return found;
+  }
+
+  /**
+   * Try each card family in turn. SI-Card 8 and later first, since that is
+   * nearly everything in use now.
+   */
+  async #probeForCard() {
+    // Block 0 of an SI-Card 8/9/10/11/pCard carries the card number.
+    try {
+      const block = await this.sendCommand(CMD.GET_SI9, [0x00], { timeout: 3000, retries: 0 });
+      const image = block.subarray(1);
+      const layout = CARD.SI8; // CN2/CN1/CN0 sit at the same place on all of them
+      if (image.length > layout.CN0) {
+        const cardNumber = decodeCardNumber(
+          Uint8Array.of(0, image[layout.CN2], image[layout.CN1], image[layout.CN0])
+        );
+        if (cardNumber > 0) return { cardNumber, cardType: cardTypeFromNumber(cardNumber) };
+      }
+    } catch (err) {
+      if (!isEmptySlot(err)) throw err;
+    }
+
+    try {
+      const frames = await this.sendCommandFrames(CMD.GET_SI6, [0x00], {
+        frames: 1,
+        timeout: 3000,
+        retries: 0,
+      });
+      const image = frames[0]?.data?.subarray(1);
+      const layout = CARD.SI6;
+      if (image && image.length > layout.CN0) {
+        const cardNumber = decodeCardNumber(
+          Uint8Array.of(0, image[layout.CN2], image[layout.CN1], image[layout.CN0])
+        );
+        if (cardNumber > 0) return { cardNumber, cardType: 'SI6' };
+      }
+    } catch (err) {
+      if (!isEmptySlot(err)) throw err;
+    }
+
+    try {
+      const image = await this.sendCommand(CMD.GET_SI5, [], { timeout: 3000, retries: 0 });
+      const layout = CARD.SI5;
+      if (image.length > layout.CN0) {
+        const cardNumber = decodeCardNumber(
+          Uint8Array.of(0, image[layout.CN2], image[layout.CN1], image[layout.CN0])
+        );
+        if (cardNumber > 0) return { cardNumber, cardType: 'SI5' };
+      }
+    } catch (err) {
+      if (!isEmptySlot(err)) throw err;
+    }
+
+    return null;
   }
 
   #cardInserted() {
@@ -237,6 +350,11 @@ export class SIReadout extends SIStation {
     this._lastPolled = this.cardNumber;
     return changed;
   }
+}
+
+/** A station with nothing in the slot refuses the read. That is an answer. */
+function isEmptySlot(error) {
+  return error instanceof SINakError || error instanceof SITimeoutError;
 }
 
 function joinBlocks(frames) {

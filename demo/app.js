@@ -140,6 +140,7 @@ async function attach(next) {
   await refreshFacts();
   showMode();
   showTarget();
+  showPunchMode();
   setControlsEnabled(true);
   setStatus('live', 'Connected and listening');
 }
@@ -202,6 +203,7 @@ function setStatus(kind, text) {
 function setControlsEnabled(enabled) {
   for (const id of [
     'beep', 'syncClock', 'readBackup', 'eraseBackup', 'saveSysval', 'powerOff',
+    'detectCard',
   ]) {
     $(id).disabled = !enabled;
   }
@@ -209,6 +211,9 @@ function setControlsEnabled(enabled) {
     button.disabled = !enabled;
   }
   for (const radio of document.querySelectorAll('input[name="target"]')) {
+    radio.disabled = !enabled;
+  }
+  for (const radio of document.querySelectorAll('input[name="punchMode"]')) {
     radio.disabled = !enabled;
   }
   $('readRemote').disabled = !enabled;
@@ -360,6 +365,44 @@ function showRemoteFacts(info) {
   }
   $('remotePanel').hidden = false;
 }
+
+// ------------------------------------------------------------- punch handling
+
+/** Reflect the station's protocol bits in the radios. */
+function showPunchMode() {
+  const autosend = station?.protoConfig?.autoSend ?? false;
+  const value = autosend ? 'autosend' : 'readout';
+  const radio = document.querySelector(`input[name="punchMode"][value="${value}"]`);
+  if (radio) radio.checked = true;
+  $('punchModeNote').textContent = autosend
+    ? 'Punches arrive as they happen. Card readout is off while this is on.'
+    : 'Cards are read when inserted. Live punches are off while this is on.';
+}
+
+for (const radio of document.querySelectorAll('input[name="punchMode"]')) {
+  radio.addEventListener('change', () =>
+    run(async () => {
+      // setAutoSend flips handshake to the opposite, which is what the
+      // hardware requires -- the two cannot both be on.
+      await station.setAutoSend(radio.value === 'autosend');
+      showPunchMode();
+      write('tx', `punch handling: ${radio.value}`);
+    })
+  );
+}
+
+$('detectCard').addEventListener('click', () =>
+  run(async () => {
+    const found = await station.detectCard();
+    if (found) {
+      write('rx', `card ${found.cardNumber} (${found.cardType}) is in the station`);
+      setStatus('live', `Reading card ${found.cardNumber}`);
+    } else {
+      setStatus('warn', 'No card in the station');
+      write('rx', 'no card in the station');
+    }
+  })
+);
 
 // ------------------------------------------------------------------- commands
 

@@ -190,6 +190,34 @@ read sequence that works for it: one command for SI-Card 5, three frames for
 SI-Card 6, block by block for 8/9/pCard, and all blocks at once for the 10
 family because reading those block by block is slow and unreliable.
 
+### A card that is already in the station
+
+Stations announce a card when it goes in, and say nothing afterwards. Connect to
+a station that already holds a card and it looks broken: right mode, card in,
+nothing happens. `SIReadout` therefore probes for one when it connects, and the
+card arrives as a normal `card` event:
+
+```js
+const station = await SIReadout.open(source);   // finds a card already in
+station.addEventListener('card', (e) => console.log(e.detail.cardNumber));
+```
+
+Ask at any time with `detectCard()`, which resolves to `null` when the slot is
+empty rather than throwing. Pass `detectOnConnect: false` to skip the probe.
+
+### Reading cards or streaming punches, not both
+
+The protocol byte ties handshake and auto-send together as opposites, so a
+station does one or the other:
+
+| | handshake | auto-send | what you get |
+| --- | --- | --- | --- |
+| `setAutoSend(false)` | on | off | cards read on insertion |
+| `setAutoSend(true)` | off | on | punches sent as they happen |
+
+A station in readout mode with neither bit set stays silent when a card goes
+in, which is the usual cause of "readout mode does not read out".
+
 ### Controls in autosend mode — `SIControl`
 
 ```js

@@ -158,6 +158,8 @@ export interface SIReadoutOptions extends SIStationOptions {
   autoRead?: boolean;
   /** Beep after a successful read. Default true. */
   autoAck?: boolean;
+  /** Look for a card already in the station when connecting. Default true. */
+  detectOnConnect?: boolean;
 }
 
 export interface SIControlOptions extends SIStationOptions {
@@ -401,7 +403,18 @@ export declare class SIReadout extends SIStation {
   cardType: SICardType | null;
   busy: boolean;
 
+  autoDetectOnConnect?: boolean;
+  detectOnConnect: boolean;
+
   assertReadoutMode(): void;
+  /**
+   * Ask the station whether a card is in it right now, rather than waiting for
+   * an insertion that may already have happened.
+   */
+  detectCard(options?: { read?: boolean }): Promise<{
+    cardNumber: number;
+    cardType: SICardType;
+  } | null>;
   readCard(reftime?: Date | null): Promise<SICardData>;
   readCardRaw(): Promise<Uint8Array>;
   ackCard(): Promise<void>;
