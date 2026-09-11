@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2008-2023 Gaudenz Steinlin, Simon Harston, Jan Vorwerk,
+//                         Per Magnusson (sireader2.py)
+// Copyright (C) 2026 dulcilubio (JavaScript port)
+// See NOTICE and LICENSE at the repository root.
+
 /**
  * SIStation: the base class, equivalent to `SIReader` in sireader2.py.
  *

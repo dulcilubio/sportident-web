@@ -305,3 +305,20 @@ punches with a recovered gap.
   naive `datetime` values the Python library returns. Card times carry no date,
   only a half-day offset and sometimes a weekday, so they are always resolved
   relative to a reference time you can pass in.
+
+## Licence
+
+GPL-3.0-or-later, inherited from the Python original. This is a derivative
+work of [`sireader2.py`](https://github.com/per-magnusson/sportident-python),
+so it cannot be relicensed under anything more permissive.
+
+Copyright on the protocol work that this port is based on stays with the
+original authors — Gaudenz Steinlin, Simon Harston, Jan Vorwerk and Per
+Magnusson. The full notice is in [NOTICE](NOTICE); the licence text is in
+[LICENSE](LICENSE).
+
+What that means if you use this: you may run, study, modify and redistribute
+it, including commercially. If you distribute it, or a modified version, you
+have to pass on the same freedoms — ship the source, keep it under GPL-3.0,
+keep the copyright notices, and state your changes. Using it inside a service
+you host is not distribution and triggers none of that.

@@ -1,0 +1,36 @@
+sportident-web
+==============
+
+This project is a JavaScript port of sireader2.py, and is therefore a
+derivative work distributed under the GNU General Public License v3.0 or
+later. The full licence text is in LICENSE.
+
+Upstream copyright
+------------------
+
+From sireader2.py (https://github.com/per-magnusson/sportident-python),
+carried over here unchanged as required by GPL-3.0 section 5:
+
+    Copyright (C) 2008-2014  Gaudenz Steinlin <gaudenz@durcheinandertal.ch>
+                       2014  Simon Harston <simon@harston.de>
+                       2015  Jan Vorwerk <jan.vorwerk@angexis.com>
+                       2019  Per Magnusson <per.magnusson@gmail.com>
+                       2023  Per Magnusson <per.magnusson@gmail.com>
+
+This port
+---------
+
+    Copyright (C) 2026  dulcilubio
+
+Modifications
+-------------
+
+This is not a copy of the original: it is a rewrite in JavaScript targeting
+the Web Serial API, with a non-blocking command queue in place of blocking
+serial reads. The behavioural differences from the Python original are
+listed under "What changed in the port" in README.md.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+more details.
