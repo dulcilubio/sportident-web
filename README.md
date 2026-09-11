@@ -249,14 +249,35 @@ const info = await station.withRemote(() => station.readInfo());
 `withRemote()` is the safe way to do it: it switches, runs your function and
 returns to direct whatever happens.
 
-A station on the stick is almost always asleep, and one command will not rouse
-it -- in practice it can take several seconds of traffic. `withRemote()`
-therefore spends up to five seconds waking it first, and throws
-`SITimeoutError` if it never answers rather than failing obscurely later:
+A station on the stick is almost always asleep, and rousing it takes far longer
+than seems reasonable. Measured on a BSF8 coming out of a real sleep:
+
+```
+  t=  0.7s  attempt   1  NAK
+  t=  7.2s  attempt  10  NAK
+  t= 15.3s  attempt  21  NAK
+  t= 22.8s  attempt  31  ANSWER
+```
+
+Thirty-one attempts over 22.8 seconds of continuous traffic before it answered
+at all. `WAKE_TIMEOUT` is therefore 30 seconds, and `withRemote()` spends up to
+that waking the station before running your function, throwing `SITimeoutError`
+if it never answers rather than failing obscurely later:
 
 ```js
-await station.withRemote(fn, { wake: 10000 });   // a longer budget
+await station.withRemote(fn, { wake: 60000 });   // a longer budget
 await station.withRemote(fn, { wake: false });   // skip it
+```
+
+Half a minute is a long time to show nothing, so a `waking` event is dispatched
+on every attempt with `{ attempts, elapsed, timeout }`, and a `wake` event when
+it finally answers:
+
+```js
+station.addEventListener('waking', (e) => {
+  const { elapsed, timeout } = e.detail;
+  progress.value = elapsed / timeout;
+});
 ```
 
 `wake()` is available on its own, and nothing about it blocks: each attempt is

@@ -382,5 +382,14 @@ export const USB_FILTERS = [
   { usbVendorId: 0x0403 }, // FTDI serial adapters (RS232 stations)
 ];
 
+/**
+ * How long to spend rousing a station on the coupling stick, in ms.
+ *
+ * Measured on a BSF8 coming out of a real sleep: 31 attempts over 22.8 seconds
+ * of continuous traffic before it answered at all. Five seconds sounds
+ * reasonable and is not close to enough.
+ */
+export const WAKE_TIMEOUT = 30000;
+
 export const BAUD_HIGH = 38400;
 export const BAUD_LOW = 4800;

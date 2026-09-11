@@ -31,6 +31,7 @@ import {
   REMOTE_OFF,
   SUPPORTED_MODES,
   SUPPORTED_READ_BACKUP_MODES,
+  WAKE_TIMEOUT,
   ACK,
   BUL,
   BUX,
@@ -541,8 +542,10 @@ export class SIStation extends EventTarget {
    * Keep prodding a sleeping station until it answers.
    *
    * A station on the coupling stick is usually asleep, and one command is not
-   * enough to rouse it -- in practice it can take several seconds of traffic.
-   * This keeps trying until it answers or the budget runs out.
+   * enough to rouse it. Measured on a BSF8 coming out of a real sleep: 31
+   * attempts over 22.8 seconds of continuous traffic before the first answer.
+   * The default budget is 30 seconds for that reason -- five is not enough,
+   * however reasonable it sounds.
    *
    * Nothing here blocks. Each attempt is awaited and the gaps are timers, so
    * the page stays responsive and card events keep arriving throughout. Pass a
@@ -556,12 +559,12 @@ export class SIStation extends EventTarget {
    * ```
    *
    * @param {object} [options]
-   * @param {number} [options.timeout] total budget in ms, default 5000
+   * @param {number} [options.timeout] total budget in ms, default WAKE_TIMEOUT (30s)
    * @param {number} [options.interval] pause between attempts in ms, default 250
    * @param {AbortSignal} [options.signal]
    * @returns {Promise<boolean>} true if the station answered
    */
-  async wake({ timeout = 5000, interval = 250, signal } = {}) {
+  async wake({ timeout = WAKE_TIMEOUT, interval = 250, signal } = {}) {
     const deadline = Date.now() + timeout;
     let attempts = 0;
 
@@ -574,9 +577,17 @@ export class SIStation extends EventTarget {
       const remaining = deadline - Date.now();
       const perTry = Math.max(200, Math.min(700, remaining));
 
+      this.dispatchEvent(
+        new CustomEvent('waking', {
+          detail: { attempts, elapsed: timeout - remaining, timeout },
+        })
+      );
+
       try {
         await this.sendCommand(CMD.GET_TIME, [], { timeout: perTry, retries: 0 });
-        this.dispatchEvent(new CustomEvent('wake', { detail: { attempts } }));
+        this.dispatchEvent(
+          new CustomEvent('wake', { detail: { attempts, elapsed: timeout - remaining } })
+        );
         return true;
       } catch (err) {
         // A station that is merely asleep answers with a NAK, or not at all.
@@ -619,8 +630,9 @@ export class SIStation extends EventTarget {
    * ```
    *
    * A station on the stick is usually asleep, so by default this spends up to
-   * five seconds waking it before running `fn`. Pass `wake: false` to skip
-   * that, or a number to change the budget.
+   * thirty seconds waking it before running `fn` -- a real cold wake was
+   * measured at 22.8 seconds. Pass `wake: false` to skip that, or a number to
+   * change the budget. Listen for `waking` events to show progress.
    *
    * @template T
    * @param {(station: this) => Promise<T>} fn
@@ -629,12 +641,12 @@ export class SIStation extends EventTarget {
    * @param {AbortSignal} [options.signal]
    * @returns {Promise<T>}
    */
-  async withRemote(fn, { wake = 5000, signal } = {}) {
+  async withRemote(fn, { wake = WAKE_TIMEOUT, signal } = {}) {
     const wasDirect = this.direct;
     if (wasDirect) await this.setRemote();
 
     if (wake !== false) {
-      const timeout = wake === true ? 5000 : wake;
+      const timeout = wake === true ? WAKE_TIMEOUT : wake;
       const awake = await this.wake({ timeout, signal });
       if (!awake) {
         // Put the session back before reporting, so a caller that catches this

@@ -9,7 +9,7 @@ import { test } from 'node:test';
 
 import { SIStation } from '../src/station.js';
 import { SimulatedTransport } from '../src/simulator.js';
-import { CMD, MODE, O } from '../src/constants.js';
+import { CMD, MODE, O, WAKE_TIMEOUT } from '../src/constants.js';
 import { SINakError } from '../src/errors.js';
 
 async function connected() {
@@ -101,6 +101,43 @@ test('wake reports a broken link instead of retrying it', async () => {
   };
 
   await assert.rejects(() => station.wake({ timeout: 5000 }), /cable fell out/);
+
+  await station.disconnect();
+});
+
+test('waking dispatches progress, so a long wait is not silent', async () => {
+  const { station } = await connected();
+  asleepUntil(station, Date.now() + 400);
+
+  const progress = [];
+  station.addEventListener('waking', (e) => progress.push(e.detail));
+  let woke = null;
+  station.addEventListener('wake', (e) => (woke = e.detail));
+
+  assert.equal(await station.wake({ timeout: 5000, interval: 50 }), true);
+
+  assert.ok(progress.length >= 2, `several progress events, got ${progress.length}`);
+  assert.equal(progress[0].attempts, 1);
+  assert.ok(progress[0].timeout === 5000, 'the budget is reported for a progress bar');
+  assert.ok(woke && woke.attempts >= 1, 'and a wake event on success');
+
+  await station.disconnect();
+});
+
+test('the default budget matches what a real cold wake needs', async () => {
+  // Measured on a BSF8 coming out of sleep: 31 attempts over 22.8s. Five
+  // seconds sounds reasonable and would have given up at attempt 7.
+  assert.equal(WAKE_TIMEOUT, 30000, 'the default has to cover a real cold wake');
+
+  const { station } = await connected();
+  asleepUntil(station, Date.now() + 600000);
+
+  // withRemote reports the budget it used, so a short one proves it is wired
+  // to the same knob without waiting the full default here.
+  await assert.rejects(
+    () => station.withRemote(() => station.readInfo(), { wake: 300 }),
+    /did not answer within 300 ms/
+  );
 
   await station.disconnect();
 });
