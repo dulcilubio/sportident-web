@@ -1,0 +1,739 @@
+/**
+ * SIStation: the base class, equivalent to `SIReader` in sireader2.py.
+ *
+ * Every method that talks to the station returns a promise. Commands are
+ * queued so that two callers cannot interleave on the wire, and replies are
+ * matched to commands by an event dispatcher rather than by blocking reads.
+ * Anything the station sends on its own initiative, such as a card being
+ * inserted or an autosend punch, is delivered as an event.
+ */
+
+import { concat, hex, toBytes, toInt } from './bytes.js';
+import {
+  BAUD_HIGH,
+  BAUD_LOW,
+  CMD,
+  MODE_NAMES,
+  MODEL_NAMES,
+  O,
+  P_MS_DIRECT,
+  P_MS_INDIRECT,
+  REMOTE_OFF,
+  SUPPORTED_MODES,
+  SUPPORTED_READ_BACKUP_MODES,
+  ACK,
+  BUL,
+  BUX,
+} from './constants.js';
+import {
+  SICardChangedError,
+  SIConnectionError,
+  SINakError,
+  SIProtocolError,
+  SITimeoutError,
+} from './errors.js';
+import { buildCommand, FrameParser } from './framer.js';
+import {
+  decodeBackupExtended,
+  decodeBackupLegacy,
+  decodeCardNumber,
+  decodeTime,
+  extractSysval,
+} from './protocol.js';
+import { WebSerialTransport } from './transport.js';
+
+/** Frames the station can send at any time, without being asked. */
+const UNSOLICITED = new Set([
+  CMD.SI5_DET,
+  CMD.SI6_DET,
+  CMD.SI9_DET,
+  CMD.SI_REM,
+  CMD.TRANS_REC,
+  CMD.SRR_PING,
+  CMD.SRR_ADHOC,
+]);
+
+export class SIStation extends EventTarget {
+  #transport;
+  #parser;
+  #pending = null;
+  #queue = Promise.resolve();
+  #closed = false;
+
+  /**
+   * @param {object} transport anything with open/close/write/setBaudRate and
+   *   onData/onError/onClose callbacks, normally a WebSerialTransport
+   * @param {object} [options]
+   * @param {boolean} [options.debug] log every frame to the console
+   * @param {boolean} [options.wakeup] send a 0xFF wakeup byte before commands
+   * @param {number}  [options.timeout] milliseconds to wait for a reply
+   * @param {number}  [options.retries] extra attempts after a timeout
+   * @param {boolean} [options.strictCardChanged] fail a command when a card is
+   *   inserted or removed while it is in flight, the way the Python original
+   *   does. Off by default, because carrying on is nearly always what you want.
+   */
+  constructor(transport, options = {}) {
+    super();
+    this.debug = options.debug ?? false;
+    this.wakeup = options.wakeup ?? true;
+    this.timeout = options.timeout ?? 2000;
+    this.retries = options.retries ?? 1;
+    this.strictCardChanged = options.strictCardChanged ?? false;
+
+    /** Most recent system data block, or null. */
+    this.sysval = null;
+    /** Protocol and mode configuration, refreshed after every change. */
+    this.protoConfig = null;
+    /** Code of the station that answered last. */
+    this.stationCode = null;
+    /** Serial number of the station. */
+    this.serialNumber = 0;
+    /** False once setRemote() has been used. */
+    this.direct = true;
+
+    this.#transport = transport;
+    transport.onData = (chunk) => {
+      this.dispatchEvent(new CustomEvent('rx', { detail: { bytes: chunk } }));
+      if (this.debug) console.debug('<<--', hex(chunk));
+      this.#parser.push(chunk);
+    };
+    transport.onError = (err) => this.#fail(err);
+    transport.onClose = () => {
+      this.#closed = true;
+      this.dispatchEvent(new CustomEvent('close'));
+    };
+
+    this.#parser = new FrameParser({
+      onFrame: (frame) => this.#handleFrame(frame),
+      onNak: () => {
+        this.dispatchEvent(new CustomEvent('nak'));
+        this.#reject(new SINakError());
+      },
+      onGarbage: (reason, bytes) => {
+        this.dispatchEvent(
+          new CustomEvent('garbage', { detail: { reason, bytes } })
+        );
+        if (this.debug) console.warn('SI garbage:', reason, hex(bytes));
+      },
+    });
+  }
+
+  // ---------------------------------------------------------------- lifecycle
+
+  /**
+   * Open a Web Serial port and shake hands with the station.
+   *
+   * @param {SerialPort} port from requestPort() or getGrantedPorts()
+   * @param {object} [options] passed to the constructor, plus:
+   * @param {number} [options.baudRate] start speed, defaults to 38400
+   * @param {boolean} [options.tryLowSpeed] retry at 4800 baud, default true
+   * @param {boolean} [options.handshake] send SET_MS on connect, default true
+   * @returns {Promise<SIStation>}
+   */
+  static async open(port, options = {}) {
+    const station = new this(new WebSerialTransport(port), options);
+    await station.connect(options);
+    return station;
+  }
+
+  /** Open the transport and identify the station. */
+  async connect({
+    baudRate = BAUD_HIGH,
+    tryLowSpeed = true,
+    handshake = true,
+  } = {}) {
+    await this.#transport.open({ baudRate });
+    this.#closed = false;
+
+    if (handshake) {
+      try {
+        await this.setDirect();
+      } catch (err) {
+        if (!(err instanceof SITimeoutError) || !tryLowSpeed || baudRate === BAUD_LOW) {
+          throw err;
+        }
+        // Older stations, and stations that were switched to the legacy speed,
+        // only answer at 4800 baud.
+        await this.#transport.setBaudRate(BAUD_LOW);
+        try {
+          await this.setDirect();
+        } catch (cause) {
+          throw new SIConnectionError(
+            'No SPORTident station answered at 38400 or 4800 baud. Is it awake and is this the right port?',
+            { cause }
+          );
+        }
+      }
+    }
+
+    await this.refreshSysval();
+    this.dispatchEvent(new CustomEvent('open'));
+    return this;
+  }
+
+  /** Close the serial port. */
+  async disconnect() {
+    this.#reject(new SIConnectionError('The port was closed'));
+    await this.#transport.close();
+    this.#closed = true;
+  }
+
+  get isOpen() {
+    return !this.#closed && this.#transport.isOpen;
+  }
+
+  get baudRate() {
+    return this.#transport.baudRate;
+  }
+
+  // ------------------------------------------------------------ command layer
+
+  /**
+   * Send a command and wait for the reply.
+   *
+   * @param {number} cmd one of the CMD.* constants
+   * @param {Uint8Array|number[]} [parameters]
+   * @param {object} [options]
+   * @param {number} [options.frames] how many reply frames to collect. SI-Card 6
+   *   answers with three, SI-Card 10 with five.
+   * @param {number} [options.responseCmd] expected reply command, defaults to
+   *   the command byte that was sent
+   * @param {number} [options.timeout]
+   * @param {number} [options.retries]
+   * @param {boolean} [options.wakeup]
+   * @returns {Promise<Uint8Array>} the payload, or the payloads joined when
+   *   more than one frame was requested
+   */
+  async sendCommand(cmd, parameters = [], options = {}) {
+    const frames = await this.sendCommandFrames(cmd, parameters, options);
+    return frames.length === 1 ? frames[0].data : concat(...frames.map((f) => f.data));
+  }
+
+  /** As sendCommand, but returns the raw frames. */
+  async sendCommandFrames(cmd, parameters = [], options = {}) {
+    const {
+      frames = 1,
+      responseCmd = cmd,
+      timeout = this.timeout,
+      retries = this.retries,
+      wakeup = this.wakeup,
+    } = options;
+
+    return this.#enqueue(async () => {
+      let lastError;
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+          return await this.#exchange(cmd, parameters, {
+            frames,
+            responseCmd,
+            timeout,
+            wakeup: wakeup || attempt > 0, // always wake up on a retry
+          });
+        } catch (err) {
+          lastError = err;
+          const worthRetrying =
+            err instanceof SITimeoutError || err instanceof SIProtocolError;
+          if (!worthRetrying || attempt === retries) throw err;
+          if (this.debug) {
+            console.warn(`SI retry ${attempt + 1} after ${err.message}`);
+          }
+        }
+      }
+      throw lastError;
+    });
+  }
+
+  async #exchange(cmd, parameters, { frames, responseCmd, timeout, wakeup }) {
+    if (!this.isOpen) throw new SIConnectionError('The port is not open');
+
+    const stale = this.#parser.reset();
+    if (stale.length && this.debug) {
+      console.warn('SI: discarded stale input', hex(stale));
+    }
+
+    const bytes = buildCommand(cmd, parameters, wakeup);
+    const waiter = this.#expect(responseCmd, frames, timeout);
+
+    this.dispatchEvent(new CustomEvent('tx', { detail: { bytes, cmd } }));
+    if (this.debug) console.debug('-->>', hex(bytes));
+
+    try {
+      await this.#transport.write(bytes);
+    } catch (err) {
+      this.#reject(err);
+      throw err;
+    }
+    return waiter;
+  }
+
+  /** Send raw bytes, for the handful of commands that are not normal frames. */
+  async sendRaw(bytes) {
+    return this.#enqueue(async () => {
+      this.dispatchEvent(new CustomEvent('tx', { detail: { bytes } }));
+      if (this.debug) console.debug('-->>', hex(bytes), '(raw)');
+      await this.#transport.write(Uint8Array.from(bytes));
+    });
+  }
+
+  #enqueue(fn) {
+    const run = this.#queue.then(fn, fn);
+    this.#queue = run.then(
+      () => {},
+      () => {}
+    );
+    return run;
+  }
+
+  #expect(responseCmd, wanted, timeout) {
+    return new Promise((resolve, reject) => {
+      const pending = {
+        responseCmd,
+        wanted,
+        frames: [],
+        resolve,
+        reject,
+        timer: null,
+      };
+      const arm = () => {
+        clearTimeout(pending.timer);
+        pending.timer = setTimeout(() => {
+          this.#pending = null;
+          reject(
+            new SITimeoutError(
+              `No reply to command 0x${responseCmd.toString(16)} within ${timeout} ms`
+            )
+          );
+        }, timeout);
+      };
+      pending.arm = arm;
+      arm();
+      this.#pending = pending;
+    });
+  }
+
+  #settle() {
+    const pending = this.#pending;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.#pending = null;
+    pending.resolve(pending.frames);
+  }
+
+  #reject(error) {
+    const pending = this.#pending;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.#pending = null;
+    pending.reject(error);
+  }
+
+  #fail(error) {
+    this.dispatchEvent(new CustomEvent('error', { detail: { error } }));
+    this.#reject(error);
+  }
+
+  #handleFrame(frame) {
+    this.stationCode = frame.station;
+    this.dispatchEvent(new CustomEvent('frame', { detail: frame }));
+    if (this.debug) {
+      console.debug(
+        `<<-- cmd 0x${frame.cmd.toString(16)} station ${frame.station} data ${hex(frame.data)}`
+      );
+    }
+
+    if (UNSOLICITED.has(frame.cmd)) {
+      this.handleUnsolicited(frame);
+      return;
+    }
+
+    const pending = this.#pending;
+    if (!pending) {
+      this.dispatchEvent(new CustomEvent('unexpectedFrame', { detail: frame }));
+      return;
+    }
+    if (pending.responseCmd !== null && frame.cmd !== pending.responseCmd) {
+      // Most likely a late reply to a command that already timed out. Drop it
+      // and keep waiting rather than failing the command in flight.
+      this.dispatchEvent(new CustomEvent('unexpectedFrame', { detail: frame }));
+      return;
+    }
+
+    pending.frames.push(frame);
+    if (pending.frames.length >= pending.wanted) {
+      this.#settle();
+    } else {
+      pending.arm(); // more to come, restart the clock
+    }
+  }
+
+  /**
+   * Handle a frame the station sent on its own. Subclasses override this to
+   * track card state; the base class turns autosend punches into events.
+   */
+  handleUnsolicited(frame) {
+    if (frame.cmd === CMD.TRANS_REC) {
+      const punch = decodeAutosendPunch(frame.data);
+      this.dispatchEvent(new CustomEvent('punch', { detail: punch }));
+    }
+  }
+
+  /** Notify a pending command that the card changed, if strict mode is on. */
+  notifyCardChanged(message) {
+    if (this.strictCardChanged) this.#reject(new SICardChangedError(message));
+  }
+
+  /** Send a bare ACK byte. Makes the station beep after a readout. */
+  async writeAck() {
+    await this.#transport.write(Uint8Array.of(ACK));
+  }
+
+  // -------------------------------------------------------------- system data
+
+  /** Read the whole 128 byte system data block into `this.sysval`. */
+  async refreshSysval() {
+    this.sysval = await this.sendCommand(CMD.GET_SYS_VAL, [0x00, 0x80]);
+    this.#updateProtoConfigFromSysval();
+    return this.sysval;
+  }
+
+  async #sysvalOrRefresh() {
+    if (!this.sysval || this.sysval.length < 0x80) await this.refreshSysval();
+    return this.sysval;
+  }
+
+  #field(offset, length) {
+    return extractSysval(this.sysval, offset, length);
+  }
+
+  #updateProtoConfigFromSysval() {
+    const proto = this.#field(O.PROTO, 1)[0];
+    const mode = this.#field(O.MODE, 1)[0];
+    this.protoConfig = {
+      extendedProtocol: (proto & (1 << 0)) !== 0,
+      autoSend: (proto & (1 << 1)) !== 0,
+      handshake: (proto & (1 << 2)) !== 0,
+      passwordAccess: (proto & (1 << 4)) !== 0,
+      readCardAfterPunch: (proto & (1 << 7)) !== 0,
+      mode,
+      modeName: MODE_NAMES[mode] ?? `0x${mode.toString(16).padStart(2, '0')}`,
+    };
+    this.serialNumber = toInt(this.#field(O.SERIAL_NO, 4));
+    this.stationCode = this.#stationCodeFromSysval();
+    return this.protoConfig;
+  }
+
+  #stationCodeFromSysval() {
+    const low = this.#field(O.STATION_CODE, 1)[0];
+    const feedback = this.#field(O.FEEDBACK, 1)[0]; // also holds the high bits
+    return low + ((feedback & 0b11000000) << 2);
+  }
+
+  /**
+   * Everything worth knowing about the station, decoded from the system data.
+   * Reads the block first if it has not been read yet.
+   */
+  async readInfo() {
+    await this.#sysvalOrRefresh();
+    const modelId = toInt(this.#field(O.MODEL_ID, 2));
+    const si6Blocks = this.#field(O.SI6_CB, 1)[0];
+    const activeMinutes = toInt(this.#field(O.ACTIVE_TIME, 2));
+    const feedback = this.#field(O.FEEDBACK, 1)[0];
+
+    return {
+      serialNumber: toInt(this.#field(O.SERIAL_NO, 4)),
+      firmware: new TextDecoder('ascii').decode(this.#field(O.FIRMWARE, 3)),
+      modelId,
+      modelName:
+        MODEL_NAMES[modelId] ?? `0x${modelId.toString(16).padStart(4, '0')}`,
+      buildDate: formatSysvalDate(this.#field(O.BUILD_DATE, 3)),
+      batteryDate: formatSysvalDate(this.#field(O.BAT_DATE, 3)),
+      memorySizeKb: this.#field(O.MEM_SIZE, 1)[0],
+      voltage: (toInt(this.#field(O.BAT_VOLT, 2)) * 5) / 65536,
+      batteryCapacityMah: (toInt(this.#field(O.BAT_CAP, 2)) * 16) / 225,
+      batteryUsedPercent: toInt(this.#field(O.USED_BAT_CAP, 3)) * 2.778e-5,
+      memoryOverflow: this.#field(O.MEM_OVERFLOW, 1)[0] !== 0,
+      code: this.#stationCodeFromSysval(),
+      mode: this.protoConfig.mode,
+      modeName: this.protoConfig.modeName,
+      activeTimeMinutes: activeMinutes,
+      activeTime: `${String(Math.floor(activeMinutes / 60)).padStart(2, '0')}:${String(
+        activeMinutes % 60
+      ).padStart(2, '0')}:00`,
+      protocolByte: this.#field(O.PROTO, 1)[0],
+      extendedProtocol: this.protoConfig.extendedProtocol,
+      autoSend: this.protoConfig.autoSend,
+      feedbackByte: feedback,
+      opticalFeedback: (feedback & 0b1) !== 0,
+      audibleFeedback: (feedback & 0b100) !== 0,
+      // 0x00 and 0xC1 mean three blocks, 0x08 and 0xFF mean all eight
+      si6With192Punches:
+        si6Blocks === 0x08 || si6Blocks === 0xff
+          ? true
+          : si6Blocks === 0x00 || si6Blocks === 0xc1
+            ? false
+            : si6Blocks,
+    };
+  }
+
+  // ------------------------------------------------------------- station setup
+
+  /** Talk to the station on the cable itself. */
+  async setDirect() {
+    await this.sendCommand(CMD.SET_MS, [P_MS_DIRECT]);
+    this.direct = true;
+  }
+
+  /** Talk through the cabled station to a station standing on top of it. */
+  async setRemote() {
+    await this.sendCommand(CMD.SET_MS, [P_MS_INDIRECT]);
+    this.direct = false;
+  }
+
+  /** @param {boolean} [extended] */
+  async setExtendedProtocol(extended = true) {
+    await this.#writeProtoConfig({ extendedProtocol: extended });
+  }
+
+  /** Turn autosend on or off. Handshake is set to the opposite, as it must be. */
+  async setAutoSend(autoSend = true) {
+    await this.#writeProtoConfig({ autoSend, handshake: !autoSend });
+  }
+
+  async #writeProtoConfig(changes) {
+    await this.#sysvalOrRefresh();
+    const config = { ...this.protoConfig, ...changes };
+    const byte =
+      ((config.extendedProtocol ? 1 : 0) << 0) |
+      ((config.autoSend ? 1 : 0) << 1) |
+      ((config.handshake ? 1 : 0) << 2) |
+      ((config.passwordAccess ? 1 : 0) << 4) |
+      ((config.readCardAfterPunch ? 1 : 0) << 7);
+    try {
+      await this.sendCommand(CMD.SET_SYS_VAL, [O.PROTO, byte]);
+    } finally {
+      await this.refreshSysval();
+    }
+  }
+
+  /** @param {number} mode one of MODE.CONTROL, START, FINISH, READOUT, CLEAR, CHECK */
+  async setOperatingMode(mode) {
+    if (!SUPPORTED_MODES.includes(mode)) {
+      throw new SIProtocolError(
+        `Cannot set mode 0x${mode.toString(16)}. Supported modes are control, start, finish, readout, clear and check.`
+      );
+    }
+    try {
+      await this.sendCommand(CMD.SET_SYS_VAL, [O.MODE, mode]);
+    } finally {
+      await this.refreshSysval();
+    }
+  }
+
+  /**
+   * Set the control code, 1 to 1023.
+   *
+   * The two high bits live in the feedback byte, so writing a code means
+   * writing that byte too. By default the beeper and lamp settings already on
+   * the station are kept; the Python original switches both on as a side
+   * effect, which you can reproduce with `preserveFeedback: false`.
+   */
+  async setStationCode(code, { preserveFeedback = true } = {}) {
+    if (!Number.isInteger(code) || code < 1 || code > 1023) {
+      throw new SIProtocolError(`Control code must be between 1 and 1023, got ${code}`);
+    }
+    await this.#sysvalOrRefresh();
+    const low = code & 0xff;
+    const highBits = (code >> 8) << 6;
+    const feedback = preserveFeedback
+      ? (this.#field(O.FEEDBACK, 1)[0] & 0b00111111) | highBits
+      : highBits | 0b00111111;
+    try {
+      await this.sendCommand(CMD.SET_SYS_VAL, [O.STATION_CODE, low, feedback]);
+    } finally {
+      await this.refreshSysval();
+    }
+  }
+
+  /** Beeper and lamp on punch. */
+  async setFeedback({ audible = true, optical = true } = {}) {
+    await this.#sysvalOrRefresh();
+    let feedback = this.#field(O.FEEDBACK, 1)[0];
+    feedback = optical ? feedback | 0b1 : feedback & ~0b1;
+    feedback = audible ? feedback | 0b100 : feedback & ~0b100;
+    await this.sendCommand(CMD.SET_SYS_VAL, [O.FEEDBACK, feedback & 0xff]);
+    await this.refreshSysval();
+  }
+
+  /** How long the station stays awake after the last punch, in minutes. */
+  async setActiveTime(minutes) {
+    if (!Number.isInteger(minutes) || minutes < 0 || minutes > 5759) {
+      throw new SIProtocolError(
+        `Active time must be between 0 and 5759 minutes, got ${minutes}`
+      );
+    }
+    await this.sendCommand(CMD.SET_SYS_VAL, concat([O.ACTIVE_TIME], toBytes(minutes, 2)));
+    await this.refreshSysval();
+  }
+
+  /** Whether SI-Card 6 is read with all eight blocks (192 punches). */
+  async setSi6With192Punches(enable = false) {
+    await this.sendCommand(CMD.SET_SYS_VAL, [O.SI6_CB, enable ? 0xff : 0xc1]);
+    await this.refreshSysval();
+  }
+
+  /** Switch the station to 4800 baud. The port follows. */
+  async setBaudRateLow() {
+    await this.sendCommand(CMD.SET_BAUD, [0x00]);
+    if (this.direct) await this.#transport.setBaudRate(BAUD_LOW);
+  }
+
+  /** Switch the station to 38400 baud. The port follows. */
+  async setBaudRateHigh() {
+    await this.sendCommand(CMD.SET_BAUD, [0x01]);
+    if (this.direct) await this.#transport.setBaudRate(BAUD_HIGH);
+  }
+
+  // -------------------------------------------------------------------- clock
+
+  /** Read the station clock. Returns null if the station reports a bad date. */
+  async getTime() {
+    const t = await this.sendCommand(CMD.GET_TIME, []);
+    const year = t[0] + 2000;
+    const month = t[1];
+    const day = t[2];
+    const pm = t[3] & 0b1;
+    let seconds = toInt(t.subarray(4, 6));
+    const hour = pm * 12 + Math.floor(seconds / 3600);
+    seconds %= 3600;
+    const minute = Math.floor(seconds / 60);
+    const second = seconds % 60;
+    const ms = Math.round((t[6] / 256) * 1000);
+
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    const date = new Date(year, month - 1, day, hour, minute, second, ms);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  /** Set the station clock. Defaults to the computer clock. */
+  async setTime(time = new Date()) {
+    const bintime = concat(
+      [time.getFullYear() % 100, time.getMonth() + 1, time.getDate()],
+      [(time.getDay() << 1) + (time.getHours() >= 12 ? 1 : 0)],
+      toBytes(
+        (time.getHours() % 12) * 3600 + time.getMinutes() * 60 + time.getSeconds(),
+        2
+      ),
+      [Math.min(255, Math.round((time.getMilliseconds() / 1000) * 256))]
+    );
+    await this.sendCommand(CMD.SET_TIME, bintime);
+  }
+
+  /** Difference between the station clock and this computer, in milliseconds. */
+  async getClockOffset() {
+    const before = Date.now();
+    const stationTime = await this.getTime();
+    const after = Date.now();
+    if (!stationTime) return null;
+    return stationTime.getTime() - (before + after) / 2;
+  }
+
+  // ------------------------------------------------------------------ actions
+
+  /** Beep and blink, even with no card in the station. */
+  async beep(count = 1) {
+    await this.sendCommand(CMD.BEEP, [count]);
+  }
+
+  /** Wipe the backup memory. There is no undo. */
+  async eraseBackup() {
+    await this.sendCommand(CMD.ERASE_BACKUP, []);
+  }
+
+  /** Switch the station off. */
+  async powerOff() {
+    await this.sendCommand(CMD.OFF, []);
+  }
+
+  /**
+   * Switch off a remote station. This is the odd byte sequence Config+ uses;
+   * it is not a normal command frame and there is no reply.
+   */
+  async powerOffRemote() {
+    await this.sendRaw(REMOTE_OFF);
+  }
+
+  // ------------------------------------------------------------ backup memory
+
+  /**
+   * Read the whole backup memory of a station in control, check, clear, start
+   * or finish mode.
+   *
+   * Set direct or remote mode first, depending on which station you mean. The
+   * cabled station must be in extended protocol mode; the remote station may be
+   * in either.
+   *
+   * @param {object} [options]
+   * @param {(done: number, total: number) => void} [options.onProgress]
+   * @param {Date} [options.now] reference time for legacy records
+   * @returns {Promise<import('./protocol.js').SIBackupPunch[]>}
+   */
+  async readBackup({ onProgress, now = new Date() } = {}) {
+    await this.refreshSysval();
+    if (!SUPPORTED_READ_BACKUP_MODES.includes(this.protoConfig.mode)) {
+      throw new SIProtocolError(
+        `Cannot read backup memory from a station in ${this.protoConfig.modeName} mode`
+      );
+    }
+
+    const sysval = this.sysval;
+    const hi = extractSysval(sysval, O.BACKUP_PTR_HI, 2);
+    const lo = extractSysval(sysval, O.BACKUP_PTR_LO, 2);
+    const endPointer = toInt(concat(hi, lo));
+
+    const extended = this.protoConfig.extendedProtocol;
+    const first = extended ? BUX.FIRST : BUL.FIRST;
+
+    const chunks = [];
+    let readPointer = 0x100; // reading always seems to start here
+    const total = Math.max(endPointer - readPointer, 0);
+
+    while (readPointer < endPointer) {
+      const count = Math.min(0x80, endPointer - readPointer);
+      const data = await this.sendCommand(
+        CMD.GET_BACKUP,
+        concat(toBytes(readPointer, 3), [count])
+      );
+      chunks.push(data.subarray(first + 1));
+      readPointer += count;
+      onProgress?.(readPointer - 0x100, total);
+    }
+
+    const memory = concat(...chunks);
+    return extended ? decodeBackupExtended(memory) : decodeBackupLegacy(memory, now);
+  }
+
+  /** Read one record from the backup memory at a byte offset. */
+  async readBackupRecord(offset, length = 8) {
+    const data = await this.sendCommand(
+      CMD.GET_BACKUP,
+      concat(toBytes(offset, 3), [length])
+    );
+    return data;
+  }
+}
+
+// --------------------------------------------------------------------- helpers
+
+function formatSysvalDate(bytes) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `20${pad(bytes[0])}-${pad(bytes[1])}-${pad(bytes[2])}`;
+}
+
+/** Decode the punch record in an autosend frame. */
+export function decodeAutosendPunch(data, reftime = null) {
+  return {
+    cardNumber: decodeCardNumber(data.subarray(0, 4)),
+    time: decodeTime(data.subarray(5, 7), null, reftime),
+    memoryOffset: toInt(data.subarray(8, 11)),
+  };
+}

@@ -1,0 +1,466 @@
+/**
+ * Demo for the sportident-web library.
+ *
+ * Serve this folder over http (Web Serial needs a secure context and module
+ * imports do not work from file://):
+ *
+ *   python3 -m http.server 8080
+ *   open http://localhost:8080/demo/
+ */
+
+import {
+  backupFilename,
+  backupToCsv,
+  downloadText,
+  formatDateTime,
+  formatTimeOfDay,
+  hex,
+  isWebSerialSupported,
+  MODE,
+  requestPort,
+  rowsToCsv,
+  SimulatedTransport,
+  SIReadout,
+  sysvalToCsv,
+  WebSerialTransport,
+} from '../src/index.js';
+
+const $ = (id) => document.getElementById(id);
+const ui = {
+  connect: $('connect'),
+  simulate: $('simulate'),
+  disconnect: $('disconnect'),
+  status: $('status'),
+  facts: $('facts'),
+  cards: $('cards'),
+  log: $('log'),
+  showHex: $('showHex'),
+  circle: $('circle'),
+  circleText: $('circleText'),
+  support: $('support'),
+  progress: $('progress'),
+  resultsHeading: $('resultsHeading'),
+};
+
+let station = null;
+let simulator = null;
+let readCards = [];
+
+// ------------------------------------------------------------------ connecting
+
+if (!isWebSerialSupported()) {
+  ui.support.hidden = false;
+  ui.support.textContent =
+    'This browser cannot open serial ports. Chrome, Edge or Opera on a desktop can. The simulator below works anywhere.';
+  ui.connect.disabled = true;
+}
+
+ui.connect.addEventListener('click', async () => {
+  try {
+    const port = await requestPort();
+    await attach(new SIReadout(new WebSerialTransport(port)));
+  } catch (error) {
+    if (error?.name === 'NotFoundError') return; // the picker was dismissed
+    fail(error);
+  }
+});
+
+ui.simulate.addEventListener('click', async () => {
+  simulator = new SimulatedTransport({ code: 31, mode: MODE.READOUT });
+  await attach(new SIReadout(simulator));
+  setStatus('live', 'Simulated station, no hardware attached');
+  scheduleSimulatedCards();
+});
+
+ui.disconnect.addEventListener('click', async () => {
+  await station?.disconnect().catch(() => {});
+  station = null;
+  simulator = null;
+  setStatus('', 'Nothing connected');
+  ui.facts.replaceChildren();
+  setCircle(null);
+  setControlsEnabled(false);
+});
+
+async function attach(next) {
+  station = next;
+  setStatus('warn', 'Opening the port…');
+
+  station.addEventListener('tx', (e) => logBytes('tx', e.detail.bytes));
+  station.addEventListener('rx', (e) => logBytes('rx', e.detail.bytes));
+  station.addEventListener('error', (e) => fail(e.detail.error));
+  station.addEventListener('garbage', (e) => write('err', `dropped: ${e.detail.reason}`));
+  station.addEventListener('close', () => setStatus('bad', 'The station went away'));
+  station.addEventListener('cardInserted', (e) =>
+    setStatus('warn', `Reading card ${e.detail.cardNumber}…`)
+  );
+  station.addEventListener('cardRemoved', () => setStatus('live', 'Ready for the next card'));
+  station.addEventListener('card', (e) => addCard(e.detail));
+  station.addEventListener('cardError', (e) => fail(e.detail.error));
+  station.addEventListener('punch', (e) => addPunch(e.detail));
+
+  try {
+    await station.connect();
+  } catch (error) {
+    fail(error);
+    station = null;
+    return;
+  }
+
+  await refreshFacts();
+  setControlsEnabled(true);
+  setStatus('live', 'Connected and listening');
+}
+
+// -------------------------------------------------------------- station panel
+
+async function refreshFacts() {
+  if (!station) return;
+  const info = await station.readInfo();
+  const offset = await station.getClockOffset();
+
+  setCircle(info.code);
+  ui.resultsHeading.textContent =
+    info.mode === MODE.READOUT ? 'Cards read' : `Punches at control ${info.code}`;
+
+  const rows = [
+    ['Control code', info.code],
+    ['Mode', info.modeName],
+    ['Model', info.modelName],
+    ['Serial number', info.serialNumber],
+    ['Firmware', info.firmware],
+    ['Battery', `${info.voltage.toFixed(2)} V`],
+    ['Battery used', `${info.batteryUsedPercent.toFixed(1)} %`],
+    ['Memory', `${info.memorySizeKb} kB${info.memoryOverflow ? ' (full)' : ''}`],
+    ['Stays awake for', info.activeTime],
+    ['Protocol', info.extendedProtocol ? 'Extended' : 'Legacy'],
+    ['Sends punches live', info.autoSend ? 'Yes' : 'No'],
+    ['Clock difference', offset === null ? 'unreadable' : `${(offset / 1000).toFixed(2)} s`],
+  ];
+
+  ui.facts.replaceChildren(
+    ...rows.map(([label, value]) => {
+      const row = document.createElement('div');
+      const dt = document.createElement('dt');
+      dt.textContent = label;
+      const dd = document.createElement('dd');
+      dd.textContent = String(value);
+      row.append(dt, dd);
+      return row;
+    })
+  );
+
+  if (info.voltage < 3.1) {
+    setStatus('bad', `Battery is very low at ${info.voltage.toFixed(2)} V`);
+  } else if (info.voltage < 3.2) {
+    setStatus('warn', `Battery is getting low at ${info.voltage.toFixed(2)} V`);
+  }
+}
+
+function setCircle(code) {
+  ui.circle.classList.toggle('idle', code === null || code === undefined);
+  ui.circleText.textContent = code === null || code === undefined ? '–' : String(code);
+}
+
+function setStatus(kind, text) {
+  ui.status.className = `status ${kind}`.trim();
+  ui.status.textContent = text;
+}
+
+function setControlsEnabled(enabled) {
+  for (const id of [
+    'beep', 'syncClock', 'readBackup', 'eraseBackup', 'saveSysval', 'powerOff',
+  ]) {
+    $(id).disabled = !enabled;
+  }
+  ui.disconnect.disabled = !enabled;
+  ui.connect.disabled = enabled || !isWebSerialSupported();
+  ui.simulate.disabled = enabled;
+}
+
+// ------------------------------------------------------------------- commands
+
+$('beep').addEventListener('click', () => run(() => station.beep(2)));
+
+$('syncClock').addEventListener('click', () =>
+  run(async () => {
+    await station.setTime(new Date());
+    await refreshFacts();
+    setStatus('live', 'Clock set from this computer');
+  })
+);
+
+$('powerOff').addEventListener('click', () =>
+  run(async () => {
+    await station.powerOff();
+    setStatus('warn', 'The station was switched off');
+  })
+);
+
+$('eraseBackup').addEventListener('click', () =>
+  run(async () => {
+    if (!confirm('Erase the backup memory? The punches on the station are gone for good.')) return;
+    await station.eraseBackup();
+    await refreshFacts();
+    setStatus('live', 'Backup memory erased');
+  })
+);
+
+$('readBackup').addEventListener('click', () =>
+  run(async () => {
+    const bar = ui.progress.firstElementChild;
+    ui.progress.hidden = false;
+    const punches = await station.readBackup({
+      onProgress: (done, total) => {
+        bar.style.width = total ? `${Math.round((done / total) * 100)}%` : '100%';
+      },
+    });
+    ui.progress.hidden = true;
+    bar.style.width = '0';
+
+    if (punches.length === 0) {
+      setStatus('warn', 'The backup memory is empty');
+      return;
+    }
+    const info = await station.readInfo();
+    const csv = backupToCsv(punches, {
+      code: info.code,
+      serialNumber: info.serialNumber,
+      mode: info.modeName,
+    });
+    downloadText(backupFilename(info.code, info.modeName, info.serialNumber), csv);
+    setStatus('live', `${punches.length} punches read and saved`);
+    showBackup(punches, info);
+  })
+);
+
+$('saveSysval').addEventListener('click', () =>
+  run(async () => {
+    await station.refreshSysval();
+    downloadText(`${station.stationCode}_configuration.csv`, sysvalToCsv(station.sysval));
+  })
+);
+
+async function run(task) {
+  if (!station) return;
+  try {
+    await task();
+  } catch (error) {
+    fail(error);
+  }
+}
+
+// -------------------------------------------------------------------- results
+
+function addCard(card) {
+  readCards.push(card);
+  const article = document.createElement('article');
+  article.className = 'readout';
+
+  const header = document.createElement('header');
+  const number = document.createElement('span');
+  number.className = 'number';
+  number.textContent = card.cardNumber;
+  const meta = document.createElement('span');
+  meta.className = 'meta';
+  meta.append(
+    document.createTextNode(`${card.cardType} · `),
+    strong(`${card.punches.length} punches`),
+    document.createTextNode(card.start ? ` · start ${clock(card.start)}` : ''),
+    document.createTextNode(card.finish ? ` · finish ${clock(card.finish)}` : '')
+  );
+  header.append(number, meta);
+
+  const table = document.createElement('table');
+  table.innerHTML =
+    '<thead><tr><th>#</th><th>Control</th><th>Time</th><th>Split</th></tr></thead>';
+  const body = document.createElement('tbody');
+
+  let previous = card.start;
+  card.punches.forEach((punch, index) => {
+    const row = document.createElement('tr');
+    row.append(
+      cell(index + 1, 'num'),
+      cell(punch.code, 'num'),
+      cell(formatTimeOfDay(punch.time)),
+      cell(previous ? splitOf(previous, punch.time) : '')
+    );
+    body.append(row);
+    previous = punch.time;
+  });
+
+  if (card.finish) {
+    const row = document.createElement('tr');
+    row.className = 'split-line';
+    row.append(
+      cell(''),
+      cell('Finish'),
+      cell(formatTimeOfDay(card.finish)),
+      cell(previous ? splitOf(previous, card.finish) : '')
+    );
+    body.append(row);
+  }
+
+  table.append(body);
+  article.append(header, table);
+  prepend(article);
+  ui.resultsHeading.textContent = `Cards read (${readCards.length})`;
+  $('exportCards').disabled = false;
+  $('clearCards').disabled = false;
+}
+
+function addPunch(punch) {
+  const line = document.createElement('article');
+  line.className = 'readout';
+  const header = document.createElement('header');
+  const number = document.createElement('span');
+  number.className = 'number';
+  number.textContent = punch.cardNumber;
+  const meta = document.createElement('span');
+  meta.className = 'meta';
+  meta.textContent =
+    (punch.time ? formatTimeOfDay(punch.time) : 'no time') +
+    (punch.recovered ? ' · read back from memory' : '');
+  header.append(number, meta);
+  line.append(header);
+  prepend(line);
+}
+
+function showBackup(punches, info) {
+  const article = document.createElement('article');
+  article.className = 'readout';
+  const header = document.createElement('header');
+  const number = document.createElement('span');
+  number.className = 'number';
+  number.textContent = `Control ${info.code}`;
+  const meta = document.createElement('span');
+  meta.className = 'meta';
+  meta.append(strong(`${punches.length} punches`), document.createTextNode(' from the backup memory'));
+  header.append(number, meta);
+
+  const table = document.createElement('table');
+  table.innerHTML = '<thead><tr><th>#</th><th>Card</th><th>Punched</th><th></th></tr></thead>';
+  const body = document.createElement('tbody');
+  punches.slice(-200).forEach((punch, index) => {
+    const row = document.createElement('tr');
+    row.append(
+      cell(index + 1, 'num'),
+      cell(punch.cardNumber, 'num'),
+      cell(formatDateTime(punch.time)),
+      cell(punch.error)
+    );
+    body.append(row);
+  });
+  table.append(body);
+  article.append(header, table);
+  prepend(article);
+}
+
+$('exportCards').addEventListener('click', () => {
+  const rows = [];
+  for (const card of readCards) {
+    for (const [index, punch] of card.punches.entries()) {
+      rows.push([
+        card.cardNumber,
+        card.cardType,
+        index + 1,
+        punch.code,
+        formatDateTime(punch.time),
+        card.start ? formatTimeOfDay(card.start) : '',
+        card.finish ? formatTimeOfDay(card.finish) : '',
+      ]);
+    }
+  }
+  downloadText(
+    `cards_${new Date().toISOString().slice(0, 10)}.csv`,
+    rowsToCsv(
+      ['SIID', 'Card type', 'Punch no', 'Control', 'Punch time', 'Start', 'Finish'],
+      rows
+    )
+  );
+});
+
+$('clearCards').addEventListener('click', () => {
+  readCards = [];
+  ui.cards.replaceChildren(emptyState());
+  ui.resultsHeading.textContent = 'Cards read';
+  $('exportCards').disabled = true;
+  $('clearCards').disabled = true;
+});
+
+// -------------------------------------------------------------------- helpers
+
+function prepend(node) {
+  const empty = ui.cards.querySelector('.empty');
+  if (empty) empty.remove();
+  ui.cards.prepend(node);
+}
+
+function emptyState() {
+  const p = document.createElement('p');
+  p.className = 'empty';
+  p.textContent = 'Put a card in the station and the readout appears here.';
+  return p;
+}
+
+function cell(text, className = '') {
+  const td = document.createElement('td');
+  td.textContent = String(text ?? '');
+  if (className) td.className = className;
+  return td;
+}
+
+function strong(text) {
+  const el = document.createElement('strong');
+  el.textContent = text;
+  return el;
+}
+
+function clock(date) {
+  return formatTimeOfDay(date).slice(0, 8);
+}
+
+function splitOf(from, to) {
+  const seconds = Math.max(0, Math.round((to - from) / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+function write(kind, text) {
+  const line = document.createElement('div');
+  line.className = kind;
+  line.textContent = `${new Date().toLocaleTimeString()}  ${text}`;
+  ui.log.append(line);
+  while (ui.log.childElementCount > 400) ui.log.firstElementChild.remove();
+  ui.log.scrollTop = ui.log.scrollHeight;
+}
+
+function logBytes(kind, bytes) {
+  if (!ui.showHex.checked) return;
+  write(kind, `${kind === 'tx' ? '-->>' : '<<--'} ${hex(bytes)}`);
+}
+
+function fail(error) {
+  console.error(error);
+  setStatus('bad', error.message ?? String(error));
+  write('err', error.message ?? String(error));
+}
+
+// A few cards turn up on their own so the simulator has something to show.
+function scheduleSimulatedCards() {
+  const numbers = [8100999, 1234567, 7654321];
+  let i = 0;
+  const next = () => {
+    if (!simulator) return;
+    const base = new Date();
+    base.setHours(10, 0, 0, 0);
+    const punches = [31, 32, 45, 33, 46, 100].map((code, n) => ({
+      code,
+      time: new Date(base.getTime() + (n + 1) * (70 + n * 25) * 1000),
+    }));
+    simulator.insertCard(numbers[i % numbers.length], { punches });
+    i += 1;
+    setTimeout(() => simulator?.removeCard(), 1200);
+    setTimeout(next, 6000);
+  };
+  setTimeout(next, 600);
+}

@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Build / coverage output
+dist/
+coverage/
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS cruft
+.DS_Store
+.idea/
+.vscode/
+
+# Local env
+.env
+.env.local

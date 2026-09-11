@@ -1,0 +1,39 @@
+{
+  "name": "sportident-web",
+  "version": "1.0.0",
+  "description": "Talk to SPORTident stations from the browser over Web Serial. A non-blocking JavaScript port of sireader2.py.",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./simulator": "./src/simulator.js",
+    "./protocol": "./src/protocol.js"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/protocol.test.mjs",
+    "demo": "python3 -m http.server 8080"
+  },
+  "keywords": [
+    "sportident",
+    "orienteering",
+    "webserial",
+    "si-card",
+    "timing"
+  ],
+  "license": "GPL-3.0-or-later",
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "types": "./src/index.d.ts"
+}
