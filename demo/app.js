@@ -21,19 +21,20 @@ import {
   formatDateTime,
   formatTimeOfDay,
   hex,
-  isWebSerialSupported,
   MODE,
-  requestPort,
+  requestStation,
   rowsToCsv,
   SimulatedTransport,
   SIReadout,
   sysvalToCsv,
-  WebSerialTransport,
+  toTransport,
+  transportSupport,
 } from '../src/index.js';
 
 const $ = (id) => document.getElementById(id);
 const ui = {
   connect: $('connect'),
+  connectUsb: $('connectUsb'),
   simulate: $('simulate'),
   disconnect: $('disconnect'),
   status: $('status'),
@@ -54,22 +55,40 @@ let readCards = [];
 
 // ------------------------------------------------------------------ connecting
 
-if (!isWebSerialSupported()) {
+const support = transportSupport();
+
+if (!support.any) {
   ui.support.hidden = false;
   ui.support.textContent =
-    'This browser cannot open serial ports. Chrome, Edge or Opera on a desktop can. The simulator below works anywhere.';
+    'This browser can reach a station through neither Web Serial nor WebUSB. Chrome or ' +
+    'Edge can, on desktop and Android. The simulator below works anywhere.';
   ui.connect.disabled = true;
+  ui.connectUsb.disabled = true;
+} else if (!support.webSerial) {
+  // Android: WebUSB only.
+  ui.support.hidden = false;
+  ui.support.textContent =
+    'No Web Serial here, so the station is reached over WebUSB. Plug it in with an OTG cable.';
+} else if (!support.webUsb) {
+  ui.connectUsb.hidden = true;
 }
 
-ui.connect.addEventListener('click', async () => {
+/** @param {'auto'|'serial'|'usb'} prefer */
+async function connectWith(prefer) {
   try {
-    const port = await requestPort();
-    await attach(new SIReadout(new WebSerialTransport(port)));
+    const source = await requestStation({ prefer });
+    await attach(new SIReadout(toTransport(source)));
   } catch (error) {
     if (error?.name === 'NotFoundError') return; // the picker was dismissed
     fail(error);
   }
-});
+}
+
+ui.connect.addEventListener('click', () => connectWith('auto'));
+
+// Worth its own button because on macOS the serial picker is often empty --
+// Apple's driver ignores SPORTident's product id -- while WebUSB still works.
+ui.connectUsb.addEventListener('click', () => connectWith('usb'));
 
 ui.simulate.addEventListener('click', async () => {
   simulator = new SimulatedTransport({ code: 31, mode: MODE.READOUT });
@@ -83,6 +102,9 @@ ui.disconnect.addEventListener('click', async () => {
   station = null;
   simulator = null;
   setStatus('', 'Nothing connected');
+  $('currentMode').textContent = 'unknown';
+  showMode();
+  showTarget();
   ui.facts.replaceChildren();
   setCircle(null);
   setControlsEnabled(false);
@@ -114,6 +136,8 @@ async function attach(next) {
   }
 
   await refreshFacts();
+  showMode();
+  showTarget();
   setControlsEnabled(true);
   setStatus('live', 'Connected and listening');
 }
@@ -179,10 +203,83 @@ function setControlsEnabled(enabled) {
   ]) {
     $(id).disabled = !enabled;
   }
+  for (const button of document.querySelectorAll('button.mode')) {
+    button.disabled = !enabled;
+  }
+  for (const radio of document.querySelectorAll('input[name="target"]')) {
+    radio.disabled = !enabled;
+  }
+  $('readRemote').disabled = !enabled;
+
   ui.disconnect.disabled = !enabled;
-  ui.connect.disabled = enabled || !isWebSerialSupported();
+  ui.connect.disabled = enabled || !support.any;
+  ui.connectUsb.disabled = enabled || !support.webUsb;
   ui.simulate.disabled = enabled;
 }
+
+// ------------------------------------------------- operating mode and target
+
+/** Reflect the station's real mode in the button row. */
+function showMode() {
+  const name = station?.modeName ?? 'unknown';
+  $('currentMode').textContent = name;
+  for (const button of document.querySelectorAll('button.mode')) {
+    const active = name.toLowerCase() === button.dataset.mode;
+    button.setAttribute('aria-pressed', String(active));
+  }
+}
+
+for (const button of document.querySelectorAll('button.mode')) {
+  button.addEventListener('click', () =>
+    run(async () => {
+      await station.setOperatingMode(button.dataset.mode);
+      showMode();
+      await refreshFacts();
+      write('tx', `mode is now ${station.modeName}`);
+    })
+  );
+}
+
+/** Move the radio back to where the hardware actually is. */
+function showTarget() {
+  const current = station?.target ?? 'direct';
+  const radio = document.querySelector(`input[name="target"][value="${current}"]`);
+  if (radio) radio.checked = true;
+}
+
+for (const radio of document.querySelectorAll('input[name="target"]')) {
+  radio.addEventListener('change', async () => {
+    if (!station) return;
+    try {
+      await station.setTarget(radio.value);
+      write(
+        'tx',
+        radio.value === 'remote'
+          ? 'commands now go to the station on the coupling stick'
+          : 'commands now go to the cabled station'
+      );
+      // Anything cached describes the other station, so read it again.
+      await refreshFacts();
+      showMode();
+    } catch (error) {
+      // A station that cannot relay leaves the radio lying about the target.
+      showTarget();
+      fail(error);
+    }
+  });
+}
+
+$('readRemote').addEventListener('click', () =>
+  run(async () => {
+    const info = await station.withRemote(() => station.readInfo());
+    write(
+      'rx',
+      `remote station: ${info.modelName}, serial ${info.serialNumber}, ${info.modeName} mode, code ${info.code}`
+    );
+    // withRemote has already put us back on the cable.
+    showTarget();
+  })
+);
 
 // ------------------------------------------------------------------- commands
 

@@ -49,6 +49,18 @@ export {
   requestPort,
   WebSerialTransport,
 } from './transport.js';
+export {
+  getGrantedUsbDevices,
+  isWebUsbSupported,
+  requestUsbDevice,
+  WebUsbTransport,
+} from './webusb.js';
+export {
+  getGrantedStations,
+  requestStation,
+  toTransport,
+  transportSupport,
+} from './connect.js';
 export { decodeAutosendPunch, SIStation } from './station.js';
 export { SIReadout } from './readout.js';
 export { SIControl } from './control.js';

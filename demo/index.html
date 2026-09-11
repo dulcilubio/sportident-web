@@ -222,6 +222,17 @@
 
   label.toggle { display: flex; gap: 8px; align-items: center; font-size: 14px; color: var(--muted); }
 
+  .hint { margin: 0 0 10px; font-size: 13px; color: var(--muted); }
+  .hint strong { color: var(--detail); }
+
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  /* The mode the station is actually in, shown the way a punched control is. */
+  button.mode[aria-pressed='true'] {
+    background: var(--overprint);
+    border-color: var(--overprint);
+    color: #fff;
+  }
+
   .progress { height: 6px; background: var(--open-soft); border: 1px solid var(--rule); }
   .progress i { display: block; height: 100%; background: var(--overprint); width: 0; }
 
@@ -247,6 +258,7 @@
     </div>
     <div class="actions">
       <button id="connect" class="primary">Connect a station</button>
+      <button id="connectUsb" class="quiet">Connect over USB</button>
       <button id="simulate" class="quiet">Try it without hardware</button>
       <button id="disconnect" disabled>Disconnect</button>
     </div>
@@ -260,6 +272,44 @@
         <h2>Station</h2>
         <p class="status" id="status">Nothing connected</p>
         <dl class="facts" id="facts"></dl>
+      </section>
+
+      <section>
+        <h2>Operating mode</h2>
+        <p class="hint">
+          The mode the station is in right now is
+          <strong id="currentMode">unknown</strong>.
+        </p>
+        <div class="stack modes">
+          <button class="mode" data-mode="readout" disabled>Readout</button>
+          <button class="mode" data-mode="control" disabled>Control</button>
+          <button class="mode" data-mode="start" disabled>Start</button>
+          <button class="mode" data-mode="finish" disabled>Finish</button>
+          <button class="mode" data-mode="check" disabled>Check</button>
+          <button class="mode" data-mode="clear" disabled>Clear</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Which station</h2>
+        <p class="hint">
+          <strong>Direct</strong> talks to the station on the cable.
+          <strong>Remote</strong> relays through it to a second station placed on
+          its coupling stick, so you can configure that one without unplugging
+          anything. Commands go to whichever is selected &mdash; including the
+          destructive ones.
+        </p>
+        <div class="stack">
+          <label class="toggle">
+            <input type="radio" name="target" value="direct" checked disabled />
+            Direct &mdash; the cabled station
+          </label>
+          <label class="toggle">
+            <input type="radio" name="target" value="remote" disabled />
+            Remote &mdash; the station standing on top
+          </label>
+          <button id="readRemote" disabled>Read the remote station</button>
+        </div>
       </section>
 
       <section>

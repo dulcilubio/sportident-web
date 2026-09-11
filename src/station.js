@@ -19,6 +19,8 @@ import {
   BAUD_HIGH,
   BAUD_LOW,
   CMD,
+  MODE,
+  MODE_BY_NAME,
   MODE_NAMES,
   MODEL_NAMES,
   O,
@@ -46,7 +48,7 @@ import {
   decodeTime,
   extractSysval,
 } from './protocol.js';
-import { WebSerialTransport } from './transport.js';
+import { toTransport } from './connect.js';
 
 /** Frames the station can send at any time, without being asked. */
 const UNSOLICITED = new Set([
@@ -127,17 +129,21 @@ export class SIStation extends EventTarget {
   // ---------------------------------------------------------------- lifecycle
 
   /**
-   * Open a Web Serial port and shake hands with the station.
+   * Open a station and shake hands with it.
    *
-   * @param {SerialPort} port from requestPort() or getGrantedPorts()
+   * Takes a Web Serial port, a WebUSB device, or a transport that is already
+   * built, so the same call works on every platform.
+   *
+   * @param {SerialPort|USBDevice|object} source from requestStation(),
+   *   requestPort() or requestUsbDevice()
    * @param {object} [options] passed to the constructor, plus:
    * @param {number} [options.baudRate] start speed, defaults to 38400
    * @param {boolean} [options.tryLowSpeed] retry at 4800 baud, default true
    * @param {boolean} [options.handshake] send SET_MS on connect, default true
    * @returns {Promise<SIStation>}
    */
-  static async open(port, options = {}) {
-    const station = new this(new WebSerialTransport(port), options);
+  static async open(source, options = {}) {
+    const station = new this(toTransport(source), options);
     await station.connect(options);
     return station;
   }
@@ -487,12 +493,92 @@ export class SIStation extends EventTarget {
   async setDirect() {
     await this.sendCommand(CMD.SET_MS, [P_MS_DIRECT]);
     this.direct = true;
+    this.sysval = null; // the sysval now on hand belongs to the other station
   }
 
-  /** Talk through the cabled station to a station standing on top of it. */
+  /**
+   * Talk through the cabled station to a second one standing on top of it.
+   *
+   * The cabled station becomes a radio bridge: every command is relayed to
+   * whatever station is sitting on its coupling stick, and the replies come
+   * back the same way. That is how Config+ configures a station without
+   * plugging it in.
+   *
+   * Two things to know. The cabled station has to be in extended protocol
+   * mode to relay at all, and once this returns, every command you send is
+   * aimed at the station on top, not the one on the cable -- including the
+   * destructive ones. Prefer `withRemote()`, which puts it back.
+   */
   async setRemote() {
+    await this.#sysvalOrRefresh();
+    if (this.protoConfig && !this.protoConfig.extendedProtocol) {
+      throw new SIProtocolError(
+        'The cabled station must be in extended protocol mode before it can relay ' +
+          'to a remote station. Call setExtendedProtocol() first.'
+      );
+    }
     await this.sendCommand(CMD.SET_MS, [P_MS_INDIRECT]);
     this.direct = false;
+    this.sysval = null; // anything cached describes the cabled station
+  }
+
+  /** Which station the next command will reach: the cabled one or the one on top. */
+  get target() {
+    return this.direct ? 'direct' : 'remote';
+  }
+
+  /**
+   * @param {'direct'|'remote'} target
+   */
+  async setTarget(target) {
+    if (target === 'direct') return this.setDirect();
+    if (target === 'remote') return this.setRemote();
+    throw new SIProtocolError(`Unknown target "${target}". Use 'direct' or 'remote'.`);
+  }
+
+  /**
+   * Run something against the station standing on the coupling stick, then go
+   * back to the cabled one whatever happens.
+   *
+   * Leaving a session in remote mode is the easy mistake here: every later
+   * command silently goes to the wrong station, and a `powerOff()` or
+   * `eraseBackup()` meant for the one on the cable lands on the other. The
+   * restore runs in a finally block for that reason.
+   *
+   * ```js
+   * const info = await station.withRemote(() => station.readInfo());
+   * ```
+   *
+   * @template T
+   * @param {(station: this) => Promise<T>} fn
+   * @returns {Promise<T>}
+   */
+  async withRemote(fn) {
+    const wasDirect = this.direct;
+    if (wasDirect) await this.setRemote();
+
+    let result;
+    let failure = null;
+    try {
+      result = await fn(this);
+    } catch (err) {
+      failure = err;
+    }
+
+    if (wasDirect) {
+      try {
+        await this.setDirect();
+      } catch (err) {
+        // Being stuck in remote mode is worse than whatever went wrong inside
+        // fn, because every later command quietly goes to the wrong station.
+        // Always announce it, and let it through if nothing else failed.
+        this.dispatchEvent(new CustomEvent('error', { detail: { error: err } }));
+        if (!failure) throw err;
+      }
+    }
+
+    if (failure) throw failure;
+    return result;
   }
 
   /** @param {boolean} [extended] */
@@ -521,18 +607,59 @@ export class SIStation extends EventTarget {
     }
   }
 
-  /** @param {number} mode one of MODE.CONTROL, START, FINISH, READOUT, CLEAR, CHECK */
+  /**
+   * @param {number|string} mode one of MODE.CONTROL, START, FINISH, READOUT,
+   *   CLEAR, CHECK, or the same thing by name: 'start', 'check', 'finish',
+   *   'readout', 'clear', 'control'
+   */
   async setOperatingMode(mode) {
-    if (!SUPPORTED_MODES.includes(mode)) {
+    const value = typeof mode === 'string' ? MODE_BY_NAME[mode.trim().toLowerCase()] : mode;
+
+    if (value === undefined) {
       throw new SIProtocolError(
-        `Cannot set mode 0x${mode.toString(16)}. Supported modes are control, start, finish, readout, clear and check.`
+        `Unknown mode "${mode}". Use one of: ${Object.keys(MODE_BY_NAME).join(', ')}.`
+      );
+    }
+    if (!SUPPORTED_MODES.includes(value)) {
+      throw new SIProtocolError(
+        `Cannot set mode 0x${value.toString(16)}. Supported modes are control, start, finish, readout, clear and check.`
       );
     }
     try {
-      await this.sendCommand(CMD.SET_SYS_VAL, [O.MODE, mode]);
+      await this.sendCommand(CMD.SET_SYS_VAL, [O.MODE, value]);
     } finally {
       await this.refreshSysval();
     }
+  }
+
+  /** The mode the station is in right now, as a number. */
+  get mode() {
+    return this.protoConfig?.mode ?? null;
+  }
+
+  /** The mode the station is in right now, as a word. */
+  get modeName() {
+    return this.protoConfig?.modeName ?? null;
+  }
+
+  /** Shorthands, so a UI does not have to carry the MODE table around. */
+  async setStartMode() {
+    return this.setOperatingMode(MODE.START);
+  }
+  async setCheckMode() {
+    return this.setOperatingMode(MODE.CHECK);
+  }
+  async setFinishMode() {
+    return this.setOperatingMode(MODE.FINISH);
+  }
+  async setReadoutMode() {
+    return this.setOperatingMode(MODE.READOUT);
+  }
+  async setClearMode() {
+    return this.setOperatingMode(MODE.CLEAR);
+  }
+  async setControlMode() {
+    return this.setOperatingMode(MODE.CONTROL);
   }
 
   /**

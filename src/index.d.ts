@@ -115,6 +115,14 @@ export interface SIStationInfo {
   si6With192Punches: boolean | number;
 }
 
+/** Modes that can be set by name. */
+export type SIModeName = 'control' | 'start' | 'finish' | 'readout' | 'clear' | 'check';
+
+/** Whether commands go to the cabled station or one on its coupling stick. */
+export type SIStationTarget = 'direct' | 'remote';
+
+export declare const MODE_BY_NAME: Record<SIModeName, number>;
+
 export type SICardType = 'SI5' | 'SI6' | 'SI8' | 'SI9' | 'SI10' | 'pCard';
 
 // -------------------------------------------------------------------- options
@@ -203,13 +211,74 @@ export declare function isWebSerialSupported(): boolean;
 export declare function requestPort(options?: { anyPort?: boolean }): Promise<SISerialPort>;
 export declare function getGrantedPorts(): Promise<SISerialPort[]>;
 
+/**
+ * Structural stand-in for a WebUSB device, so the declarations stay
+ * self-contained whether or not the DOM USB types are loaded.
+ */
+export interface SIUsbDevice {
+  readonly opened: boolean;
+  open(): Promise<void>;
+  close(): Promise<void>;
+  transferIn(endpointNumber: number, length: number): Promise<unknown>;
+  transferOut(endpointNumber: number, data: BufferSource): Promise<unknown>;
+}
+
+export declare class WebUsbTransport implements SITransport {
+  constructor(
+    device: SIUsbDevice,
+    handlers?: {
+      onData?: (chunk: Uint8Array) => void;
+      onError?: (error: Error) => void;
+      onClose?: () => void;
+    }
+  );
+  readonly isOpen: boolean;
+  readonly device: SIUsbDevice;
+  baudRate: number;
+  onData: (chunk: Uint8Array) => void;
+  onError: (error: Error) => void;
+  onClose: () => void;
+  open(options?: { baudRate?: number }): Promise<void>;
+  close(options?: { keepPort?: boolean }): Promise<void>;
+  write(bytes: Uint8Array): Promise<void>;
+  setBaudRate(baudRate: number): Promise<void>;
+}
+
+export declare function isWebUsbSupported(): boolean;
+export declare function requestUsbDevice(options?: {
+  anyDevice?: boolean;
+}): Promise<SIUsbDevice>;
+export declare function getGrantedUsbDevices(): Promise<SIUsbDevice[]>;
+
+/** Anything SIStation.open() accepts. */
+export type SIStationSource = SISerialPort | SIUsbDevice | SITransport;
+
+export declare function transportSupport(): {
+  webSerial: boolean;
+  webUsb: boolean;
+  any: boolean;
+};
+export declare function requestStation(options?: {
+  prefer?: 'auto' | 'serial' | 'usb';
+  anyPort?: boolean;
+}): Promise<SISerialPort | SIUsbDevice>;
+export declare function getGrantedStations(): Promise<Array<SISerialPort | SIUsbDevice>>;
+export declare function toTransport(
+  source: SIStationSource,
+  handlers?: {
+    onData?: (chunk: Uint8Array) => void;
+    onError?: (error: Error) => void;
+    onClose?: () => void;
+  }
+): SITransport;
+
 // -------------------------------------------------------------------- classes
 
 export declare class SIStation extends EventTarget {
   constructor(transport: SITransport, options?: SIStationOptions);
 
-  /** Open a Web Serial port and shake hands with the station. */
-  static open(port: SISerialPort, options?: SIConnectOptions): Promise<SIStation>;
+  /** Open a station over Web Serial or WebUSB and shake hands with it. */
+  static open(source: SIStationSource, options?: SIConnectOptions): Promise<SIStation>;
 
   debug: boolean;
   wakeup: boolean;
@@ -247,11 +316,26 @@ export declare class SIStation extends EventTarget {
   refreshSysval(): Promise<Uint8Array>;
   readInfo(): Promise<SIStationInfo>;
 
+  /** Which station the next command reaches. */
+  readonly target: SIStationTarget;
+  /** The mode the station is in right now. */
+  readonly mode: number | null;
+  readonly modeName: string | null;
+
   setDirect(): Promise<void>;
   setRemote(): Promise<void>;
+  setTarget(target: SIStationTarget): Promise<void>;
+  /** Run something against the remote station, then return to the cabled one. */
+  withRemote<T>(fn: (station: this) => Promise<T>): Promise<T>;
   setExtendedProtocol(extended?: boolean): Promise<void>;
   setAutoSend(autoSend?: boolean): Promise<void>;
-  setOperatingMode(mode: number): Promise<void>;
+  setOperatingMode(mode: number | SIModeName): Promise<void>;
+  setStartMode(): Promise<void>;
+  setCheckMode(): Promise<void>;
+  setFinishMode(): Promise<void>;
+  setReadoutMode(): Promise<void>;
+  setClearMode(): Promise<void>;
+  setControlMode(): Promise<void>;
   setStationCode(code: number, options?: { preserveFeedback?: boolean }): Promise<void>;
   setFeedback(options?: { audible?: boolean; optical?: boolean }): Promise<void>;
   setActiveTime(minutes: number): Promise<void>;
@@ -278,7 +362,7 @@ export declare class SIStation extends EventTarget {
 export declare class SIReadout extends SIStation {
   constructor(transport: SITransport, options?: SIReadoutOptions);
   static open(
-    port: SISerialPort,
+    source: SIStationSource,
     options?: SIConnectOptions & SIReadoutOptions
   ): Promise<SIReadout>;
   autoRead: boolean;
@@ -301,7 +385,7 @@ export declare class SIReadout extends SIStation {
 export declare class SIControl extends SIStation {
   constructor(transport: SITransport, options?: SIControlOptions);
   static open(
-    port: SISerialPort,
+    source: SIStationSource,
     options?: SIConnectOptions & SIControlOptions
   ): Promise<SIControl>;
   recoverMissedPunches: boolean;

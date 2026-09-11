@@ -17,7 +17,7 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node --test test/protocol.test.mjs",
+    "test": "node --test test/*.test.mjs",
     "demo": "python3 -m http.server 8080"
   },
   "keywords": [

@@ -176,6 +176,19 @@ export const SUPPORTED_READ_BACKUP_MODES = [
   MODE.CHECK,
 ];
 
+/**
+ * The modes you can set by name, for UIs and command lines. Keys match the
+ * words printed on the station and used in Config+.
+ */
+export const MODE_BY_NAME = {
+  control: MODE.CONTROL,
+  start: MODE.START,
+  finish: MODE.FINISH,
+  readout: MODE.READOUT,
+  clear: MODE.CLEAR,
+  check: MODE.CHECK,
+};
+
 export const MODE_NAMES = {
   [MODE.SIAC_SPECIAL]: 'SIAC special',
   [MODE.CONTROL]: 'Control',
