@@ -15,6 +15,7 @@
  */
 
 import {
+  BEACON_OLD_TO_NEW,
   backupFilename,
   backupToCsv,
   downloadText,
@@ -22,6 +23,7 @@ import {
   formatTimeOfDay,
   hex,
   MODE,
+  MODE_BY_NAME,
   requestStation,
   rowsToCsv,
   SimulatedTransport,
@@ -226,12 +228,26 @@ function setControlsEnabled(enabled) {
 
 // ------------------------------------------------- operating mode and target
 
-/** Reflect the station's real mode in the button row. */
+/**
+ * Which mode bytes a button stands for.
+ *
+ * Beacon modes have two encodings -- older stations use 0x12..0x15, newer ones
+ * the same values 0x20 higher -- and a button has to light up for either, so
+ * matching is done on the byte rather than on the displayed name.
+ */
+function bytesFor(modeName) {
+  const base = MODE_BY_NAME[modeName];
+  if (base === undefined) return [];
+  const newer = BEACON_OLD_TO_NEW[base];
+  return newer === undefined ? [base] : [base, newer];
+}
+
+/** Reflect the station's real mode in the button rows. */
 function showMode() {
-  const name = station?.modeName ?? 'unknown';
-  $('currentMode').textContent = name;
+  const mode = station?.mode ?? null;
+  $('currentMode').textContent = station?.modeName ?? 'unknown';
   for (const button of document.querySelectorAll('button.mode')) {
-    const active = name.toLowerCase() === button.dataset.mode;
+    const active = mode !== null && bytesFor(button.dataset.mode).includes(mode);
     button.setAttribute('aria-pressed', String(active));
   }
 }
@@ -239,10 +255,17 @@ function showMode() {
 for (const button of document.querySelectorAll('button.mode')) {
   button.addEventListener('click', () =>
     run(async () => {
-      await station.setOperatingMode(button.dataset.mode);
+      const accepted = await station.setOperatingMode(button.dataset.mode);
       showMode();
       await refreshFacts();
-      write('tx', `mode is now ${station.modeName}`);
+
+      // Beacon modes may land on either encoding; say which the station took.
+      const asked = bytesFor(button.dataset.mode)[0];
+      const note =
+        accepted === asked
+          ? ''
+          : ` (station wanted the newer 0x${accepted.toString(16)} form)`;
+      write('tx', `mode is now ${station.modeName}${note}`);
     })
   );
 }

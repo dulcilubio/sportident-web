@@ -757,8 +757,21 @@ export class SIStation extends EventTarget {
       // Only a refusal is worth a second attempt. A connection failure is not.
       const refused = err instanceof SINakError || err instanceof SITimeoutError;
       if (!refused || alternative === undefined) throw err;
-      await this.sendCommand(CMD.SET_SYS_VAL, [O.MODE, alternative]);
-      return alternative;
+
+      try {
+        await this.sendCommand(CMD.SET_SYS_VAL, [O.MODE, alternative]);
+        return alternative;
+      } catch (second) {
+        if (!(second instanceof SINakError) && !(second instanceof SITimeoutError)) throw second;
+        // Neither encoding was accepted, so this is not a beacon-capable
+        // station rather than a station of the other generation.
+        throw new SIProtocolError(
+          `This station refused beacon mode in both encodings (0x${mode.toString(16)} and ` +
+            `0x${alternative.toString(16)}). Touch-free punching needs an Air+ capable ` +
+            'station such as a BSF8 with recent firmware, BSF9 or BS11.',
+          { cause: second }
+        );
+      }
     }
   }
 

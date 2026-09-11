@@ -208,6 +208,24 @@ test('a station happy with the old beacon encoding is left alone', async () => {
   await station.disconnect();
 });
 
+test('a station that refuses both encodings is explained, not just NAKed', async () => {
+  const { station } = await connected();
+
+  const real = station.sendCommand.bind(station);
+  station.sendCommand = async (cmd, params, options) => {
+    if (cmd === CMD.SET_SYS_VAL && params?.[0] === O.MODE) throw new SINakError();
+    return real(cmd, params, options);
+  };
+
+  await assert.rejects(
+    () => station.setOperatingMode('beacon-control'),
+    /refused beacon mode in both encodings.*Air\+ capable/s,
+    'the message points at the cause rather than repeating the NAK'
+  );
+
+  await station.disconnect();
+});
+
 test('both beacon encodings decode to the same name', () => {
   const pairs = [
     [MODE.BC_CONTROL, MODE.BC_CONTROL_NEW, 'BC control'],

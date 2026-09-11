@@ -280,6 +280,7 @@
           The mode the station is in right now is
           <strong id="currentMode">unknown</strong>.
         </p>
+        <p class="hint">Contact punching &mdash; the card goes in the hole.</p>
         <div class="stack modes">
           <button class="mode" data-mode="readout" disabled>Readout</button>
           <button class="mode" data-mode="control" disabled>Control</button>
@@ -287,6 +288,17 @@
           <button class="mode" data-mode="finish" disabled>Finish</button>
           <button class="mode" data-mode="check" disabled>Check</button>
           <button class="mode" data-mode="clear" disabled>Clear</button>
+        </div>
+
+        <p class="hint" id="beaconHint">
+          Touch-free &mdash; Air+ / SIAC beacon. The station keeps taking
+          contact punches as well. Needs an Air+ capable station.
+        </p>
+        <div class="stack modes">
+          <button class="mode" data-mode="beacon-control" disabled>BC control</button>
+          <button class="mode" data-mode="beacon-start" disabled>BC start</button>
+          <button class="mode" data-mode="beacon-finish" disabled>BC finish</button>
+          <button class="mode" data-mode="beacon-readout" disabled>BC readout</button>
         </div>
       </section>
 
