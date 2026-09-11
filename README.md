@@ -64,14 +64,48 @@ if you want the old behaviour.
 ## Install
 
 Copy `src/` into your project, or install from npm and import from
-`sportident-web`. Web Serial needs a secure context, so serve over https or
-localhost. Chrome, Edge and Opera on desktop support it; Firefox and Safari do
-not.
+`sportident-web`. Both APIs need a secure context, so serve over https or
+localhost.
 
-Drivers, same as for the Python library: Windows needs the
-[SPORTident USB driver](https://www.sportident.com/products/usb-driver), macOS
-needs the Silicon Labs CP210x VCP driver, and Linux needs the `cp210x` module
-(`modprobe cp210x`). On Linux your user also has to be in the `dialout` group.
+## Platforms
+
+There are two ways to reach a station and no single one covers everything, so
+`requestStation()` tries Web Serial first and falls back to WebUSB:
+
+```js
+import { requestStation, SIReadout } from 'sportident-web';
+
+const source = await requestStation();       // needs a click
+const station = await SIReadout.open(source);
+```
+
+| Platform | Reached by | Needs |
+| --- | --- | --- |
+| Windows | Web Serial | [SPORTident USB driver](https://www.sportident.com/products/usb-driver) |
+| Linux | Web Serial | in-kernel `cp210x`, and your user in the `dialout` group |
+| macOS | WebUSB | nothing, see below |
+| macOS | Web Serial | Silicon Labs CP210x VCP driver, if you would rather use it |
+| Android | WebUSB | an OTG cable |
+| iOS | neither | not possible in any browser |
+
+The rule underneath the table is not really which browser you are in, it is
+whether a kernel driver has claimed the device. If one has, it owns the
+endpoints and WebUSB cannot touch them, so Web Serial is the only way in. If
+none has, the station never appears as a serial port and WebUSB is the only way
+in.
+
+macOS is the interesting case. It ships a Silicon Labs driver, but that driver
+binds only to the stock product ids `0xEA60` and `0xEA70`, and SPORTident
+flashes its bridges as `0x800A`. Nothing claims the device, no `/dev/cu.*`
+appears, and the Web Serial picker comes up empty -- which is exactly the
+condition WebUSB needs. So on macOS this works with no driver installed at all.
+
+Firefox and Safari implement neither API. On iOS every browser is Safari
+underneath, so there is no way round it there.
+
+One thing to know about WebUSB: claiming a device is exclusive. While a tab has
+the station open, nothing else on the machine can talk to it, and the tab has
+to disconnect before another program can.
 
 ## Try it without a station
 
@@ -93,17 +127,27 @@ against, so it stays honest.
 ### Connecting
 
 ```js
-import { requestPort, getGrantedPorts, SIReadout, SIControl, SIStation } from 'sportident-web';
+import {
+  requestStation, getGrantedStations, transportSupport,
+  SIReadout, SIControl, SIStation,
+} from 'sportident-web';
 
-const port = await requestPort();               // filtered to SPORTident USB ids
-const port2 = await requestPort({ anyPort: true });
-const remembered = await getGrantedPorts();     // no click needed on a revisit
+const source = await requestStation();          // Web Serial, else WebUSB
+const any = await requestStation({ anyPort: true });   // drop the id filter
+const usb = await requestStation({ prefer: 'usb' });   // force one API
+const remembered = await getGrantedStations();  // no click needed on a revisit
 
-const station = await SIReadout.open(port, { debug: true });
+const station = await SIReadout.open(source, { debug: true });
 ```
 
-`open()` opens the port at 38400 baud, falls back to 4800 if nothing answers,
-sends the direct-mode handshake and reads the station configuration.
+`open()` takes a Web Serial port, a WebUSB device or a transport, so the same
+call works everywhere. It opens at 38400 baud, falls back to 4800 if nothing
+answers, sends the direct-mode handshake and reads the station configuration.
+
+`transportSupport()` reports `{ webSerial, webUsb, any }` if you would rather
+show the right button than catch a failure. The single-API entry points are
+still there: `requestPort()`/`getGrantedPorts()` for Web Serial and
+`requestUsbDevice()`/`getGrantedUsbDevices()` for WebUSB.
 
 Options: `debug`, `wakeup` (send 0xFF before commands, default true), `timeout`
 (ms, default 2000), `retries` (default 1), `strictCardChanged`, and for
@@ -160,6 +204,48 @@ control.addEventListener('punch', (e) => {
 Every autosend record carries its address in the station's backup memory. If a
 punch is lost on the wire the address jumps, and this class reads the missing
 records back out of memory and emits them in order with `recovered: true`.
+
+### Operating mode
+
+```js
+await station.setOperatingMode('start');   // by name
+await station.setOperatingMode(MODE.START); // or by constant
+await station.setCheckMode();               // or by shorthand
+
+station.mode;      // 3
+station.modeName;  // 'Start'
+```
+
+The settable modes are `control`, `start`, `finish`, `readout`, `clear` and
+`check`. Anything else is refused before a byte goes down the wire.
+
+### Direct and remote
+
+A cabled station can relay to a second one standing on its coupling stick, which
+is how Config+ configures a station without plugging it in. `direct` means the
+station on the cable, `remote` means the one on top.
+
+```js
+const info = await station.withRemote(() => station.readInfo());
+```
+
+`withRemote()` is the safe way to do it: it switches, runs your function and
+returns to direct whatever happens. That matters, because while remote is
+selected *every* command goes to the station on top, including `powerOff()` and
+`eraseBackup()`. If the switch back fails it is raised and also dispatched as an
+`error` event rather than quietly ignored.
+
+The lower-level calls are there if you want them:
+
+```js
+await station.setTarget('remote');   // or setRemote()
+station.target;                       // 'remote'
+await station.setTarget('direct');   // or setDirect()
+```
+
+The cabled station has to be in extended protocol mode to relay at all;
+`setRemote()` throws if it is not. Switching target clears the cached system
+data, since it described the other station.
 
 ### Backup memory
 
