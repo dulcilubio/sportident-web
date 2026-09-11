@@ -156,7 +156,26 @@ export const MODE = {
   BC_START: 0x13,
   BC_FINISH: 0x14,
   BC_READOUT: 0x15,
+
+  // Newer Air+ stations (BSF9 and later, and some BSF8s) report and accept the
+  // beacon modes 0x20 higher. On those, writing the 0x12 form is answered with
+  // a NAK. Thanks to the Paxy/sportident-python scripts for pinning this down.
+  BC_CONTROL_NEW: 0x32,
+  BC_START_NEW: 0x33,
+  BC_FINISH_NEW: 0x34,
+  BC_READOUT_NEW: 0x35,
 };
+
+/** Older beacon mode byte -> the form newer stations want. */
+export const BEACON_OLD_TO_NEW = {
+  [0x12]: 0x32,
+  [0x13]: 0x33,
+  [0x14]: 0x34,
+  [0x15]: 0x35,
+};
+
+/** Every beacon mode byte, either generation. */
+export const BEACON_MODES = [0x12, 0x13, 0x14, 0x15, 0x32, 0x33, 0x34, 0x35];
 
 export const SUPPORTED_MODES = [
   MODE.CONTROL,
@@ -187,6 +206,12 @@ export const MODE_BY_NAME = {
   readout: MODE.READOUT,
   clear: MODE.CLEAR,
   check: MODE.CHECK,
+  // Air+ / SIAC beacon modes. Written as the 0x12 form first; stations that
+  // refuse it get the 0x32 form instead.
+  'beacon-control': MODE.BC_CONTROL,
+  'beacon-start': MODE.BC_START,
+  'beacon-finish': MODE.BC_FINISH,
+  'beacon-readout': MODE.BC_READOUT,
 };
 
 export const MODE_NAMES = {
@@ -205,6 +230,10 @@ export const MODE_NAMES = {
   [MODE.BC_START]: 'BC start',
   [MODE.BC_FINISH]: 'BC finish',
   [MODE.BC_READOUT]: 'BC readout',
+  [MODE.BC_CONTROL_NEW]: 'BC control',
+  [MODE.BC_START_NEW]: 'BC start',
+  [MODE.BC_FINISH_NEW]: 'BC finish',
+  [MODE.BC_READOUT_NEW]: 'BC readout',
 };
 
 export const MODEL_NAMES = {

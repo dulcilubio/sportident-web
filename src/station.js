@@ -19,6 +19,8 @@ import {
   BAUD_HIGH,
   BAUD_LOW,
   CMD,
+  BEACON_MODES,
+  BEACON_OLD_TO_NEW,
   MODE,
   MODE_BY_NAME,
   MODE_NAMES,
@@ -60,6 +62,19 @@ const UNSOLICITED = new Set([
   CMD.SRR_PING,
   CMD.SRR_ADHOC,
 ]);
+
+/** A pause that can be cut short, and that never leaves a timer running. */
+function delay(ms, signal) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(finish, ms);
+    function finish() {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', finish);
+      resolve();
+    }
+    signal?.addEventListener('abort', finish, { once: true });
+  });
+}
 
 export class SIStation extends EventTarget {
   #transport;
@@ -522,6 +537,60 @@ export class SIStation extends EventTarget {
     this.sysval = null; // anything cached describes the cabled station
   }
 
+  /**
+   * Keep prodding a sleeping station until it answers.
+   *
+   * A station on the coupling stick is usually asleep, and one command is not
+   * enough to rouse it -- in practice it can take several seconds of traffic.
+   * This keeps trying until it answers or the budget runs out.
+   *
+   * Nothing here blocks. Each attempt is awaited and the gaps are timers, so
+   * the page stays responsive and card events keep arriving throughout. Pass a
+   * signal to stop early.
+   *
+   * ```js
+   * await station.setRemote();
+   * if (await station.wake({ timeout: 5000 })) {
+   *   const info = await station.readInfo();
+   * }
+   * ```
+   *
+   * @param {object} [options]
+   * @param {number} [options.timeout] total budget in ms, default 5000
+   * @param {number} [options.interval] pause between attempts in ms, default 250
+   * @param {AbortSignal} [options.signal]
+   * @returns {Promise<boolean>} true if the station answered
+   */
+  async wake({ timeout = 5000, interval = 250, signal } = {}) {
+    const deadline = Date.now() + timeout;
+    let attempts = 0;
+
+    while (Date.now() < deadline) {
+      if (signal?.aborted) return false;
+      attempts += 1;
+
+      // Whatever is left of the budget, but never long enough to overshoot it
+      // and never so short that a station that is awake cannot answer.
+      const remaining = deadline - Date.now();
+      const perTry = Math.max(200, Math.min(700, remaining));
+
+      try {
+        await this.sendCommand(CMD.GET_TIME, [], { timeout: perTry, retries: 0 });
+        this.dispatchEvent(new CustomEvent('wake', { detail: { attempts } }));
+        return true;
+      } catch (err) {
+        // A station that is merely asleep answers with a NAK, or not at all.
+        // Anything else means the link itself is broken, so stop.
+        if (!(err instanceof SINakError) && !(err instanceof SITimeoutError)) throw err;
+      }
+
+      const pause = Math.min(interval, deadline - Date.now());
+      if (pause > 0) await delay(pause, signal);
+    }
+
+    return false;
+  }
+
   /** Which station the next command will reach: the cabled one or the one on top. */
   get target() {
     return this.direct ? 'direct' : 'remote';
@@ -549,13 +618,34 @@ export class SIStation extends EventTarget {
    * const info = await station.withRemote(() => station.readInfo());
    * ```
    *
+   * A station on the stick is usually asleep, so by default this spends up to
+   * five seconds waking it before running `fn`. Pass `wake: false` to skip
+   * that, or a number to change the budget.
+   *
    * @template T
    * @param {(station: this) => Promise<T>} fn
+   * @param {object} [options]
+   * @param {boolean|number} [options.wake] wake budget in ms, or false
+   * @param {AbortSignal} [options.signal]
    * @returns {Promise<T>}
    */
-  async withRemote(fn) {
+  async withRemote(fn, { wake = 5000, signal } = {}) {
     const wasDirect = this.direct;
     if (wasDirect) await this.setRemote();
+
+    if (wake !== false) {
+      const timeout = wake === true ? 5000 : wake;
+      const awake = await this.wake({ timeout, signal });
+      if (!awake) {
+        // Put the session back before reporting, so a caller that catches this
+        // is not left talking to the wrong station.
+        if (wasDirect) await this.setDirect().catch(() => {});
+        throw new SITimeoutError(
+          `The remote station did not answer within ${timeout} ms. It may be asleep, ` +
+            'out of contact with the coupling stick, or flat.'
+        );
+      }
+    }
 
     let result;
     let failure = null;
@@ -620,15 +710,43 @@ export class SIStation extends EventTarget {
         `Unknown mode "${mode}". Use one of: ${Object.keys(MODE_BY_NAME).join(', ')}.`
       );
     }
-    if (!SUPPORTED_MODES.includes(value)) {
+    const beacon = BEACON_MODES.includes(value);
+    if (!SUPPORTED_MODES.includes(value) && !beacon) {
       throw new SIProtocolError(
-        `Cannot set mode 0x${value.toString(16)}. Supported modes are control, start, finish, readout, clear and check.`
+        `Cannot set mode 0x${value.toString(16)}. Supported modes are control, start, finish, readout, clear and check, plus the beacon modes.`
       );
     }
+
     try {
+      if (beacon) return await this.#setBeaconMode(value);
       await this.sendCommand(CMD.SET_SYS_VAL, [O.MODE, value]);
+      return value;
     } finally {
       await this.refreshSysval();
+    }
+  }
+
+  /**
+   * Write a beacon mode, coping with both generations of station.
+   *
+   * Older Air+ stations take 0x12 to 0x15. Newer ones (BSF9 and later, and some
+   * BSF8s) want those same modes 0x20 higher and answer the old form with a
+   * NAK. There is no capability bit to read, so the only way to tell is to try:
+   * old form first, new form if that is refused.
+   *
+   * @returns {Promise<number>} the byte the station actually accepted
+   */
+  async #setBeaconMode(mode) {
+    const alternative = BEACON_OLD_TO_NEW[mode];
+    try {
+      await this.sendCommand(CMD.SET_SYS_VAL, [O.MODE, mode]);
+      return mode;
+    } catch (err) {
+      // Only a refusal is worth a second attempt. A connection failure is not.
+      const refused = err instanceof SINakError || err instanceof SITimeoutError;
+      if (!refused || alternative === undefined) throw err;
+      await this.sendCommand(CMD.SET_SYS_VAL, [O.MODE, alternative]);
+      return alternative;
     }
   }
 

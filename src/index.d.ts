@@ -116,7 +116,21 @@ export interface SIStationInfo {
 }
 
 /** Modes that can be set by name. */
-export type SIModeName = 'control' | 'start' | 'finish' | 'readout' | 'clear' | 'check';
+export type SIModeName =
+  | 'control'
+  | 'start'
+  | 'finish'
+  | 'readout'
+  | 'clear'
+  | 'check'
+  | 'beacon-control'
+  | 'beacon-start'
+  | 'beacon-finish'
+  | 'beacon-readout';
+
+/** Older beacon mode bytes mapped to the form newer Air+ stations require. */
+export declare const BEACON_OLD_TO_NEW: Record<number, number>;
+export declare const BEACON_MODES: number[];
 
 /** Whether commands go to the cabled station or one on its coupling stick. */
 export type SIStationTarget = 'direct' | 'remote';
@@ -325,11 +339,27 @@ export declare class SIStation extends EventTarget {
   setDirect(): Promise<void>;
   setRemote(): Promise<void>;
   setTarget(target: SIStationTarget): Promise<void>;
-  /** Run something against the remote station, then return to the cabled one. */
-  withRemote<T>(fn: (station: this) => Promise<T>): Promise<T>;
+  /**
+   * Keep prodding a sleeping station until it answers. Never blocks; pass a
+   * signal to stop early. Resolves true if it woke.
+   */
+  wake(options?: {
+    timeout?: number;
+    interval?: number;
+    signal?: AbortSignal;
+  }): Promise<boolean>;
+  /**
+   * Run something against the remote station, then return to the cabled one.
+   * Wakes the remote station first unless `wake` is false.
+   */
+  withRemote<T>(
+    fn: (station: this) => Promise<T>,
+    options?: { wake?: boolean | number; signal?: AbortSignal }
+  ): Promise<T>;
   setExtendedProtocol(extended?: boolean): Promise<void>;
   setAutoSend(autoSend?: boolean): Promise<void>;
-  setOperatingMode(mode: number | SIModeName): Promise<void>;
+  /** @returns the mode byte the station accepted, which may differ for beacon modes */
+  setOperatingMode(mode: number | SIModeName): Promise<number>;
   setStartMode(): Promise<void>;
   setCheckMode(): Promise<void>;
   setFinishMode(): Promise<void>;

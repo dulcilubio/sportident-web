@@ -217,7 +217,24 @@ station.modeName;  // 'Start'
 ```
 
 The settable modes are `control`, `start`, `finish`, `readout`, `clear` and
-`check`. Anything else is refused before a byte goes down the wire.
+`check`, plus the Air+ beacon modes `beacon-control`, `beacon-start`,
+`beacon-finish` and `beacon-readout`. Anything else is refused before a byte
+goes down the wire.
+
+Beacon modes come in two encodings. Older Air+ stations take `0x12` to `0x15`;
+newer ones (BSF9 and later, and some BSF8s) want the same modes `0x20` higher
+and answer the old form with a NAK. There is no capability bit to read, so
+`setOperatingMode()` tries the old form and falls back to the new one, and
+returns whichever byte the station accepted:
+
+```js
+const accepted = await station.setOperatingMode('beacon-control');
+// 0x12 on an older station, 0x32 on a newer one
+```
+
+Both encodings decode to the same name, so `modeName` reads `BC control`
+either way. `sireader2.py` documents only the older set, which is why a station
+in this mode shows up there as an unknown byte.
 
 ### Direct and remote
 
@@ -230,7 +247,28 @@ const info = await station.withRemote(() => station.readInfo());
 ```
 
 `withRemote()` is the safe way to do it: it switches, runs your function and
-returns to direct whatever happens. That matters, because while remote is
+returns to direct whatever happens.
+
+A station on the stick is almost always asleep, and one command will not rouse
+it -- in practice it can take several seconds of traffic. `withRemote()`
+therefore spends up to five seconds waking it first, and throws
+`SITimeoutError` if it never answers rather than failing obscurely later:
+
+```js
+await station.withRemote(fn, { wake: 10000 });   // a longer budget
+await station.withRemote(fn, { wake: false });   // skip it
+```
+
+`wake()` is available on its own, and nothing about it blocks: each attempt is
+awaited and the gaps are timers, so the page stays responsive and card events
+keep arriving while it runs. Pass an `AbortSignal` to stop early.
+
+```js
+await station.setRemote();
+if (await station.wake({ timeout: 5000, signal })) {
+  const info = await station.readInfo();
+}
+``` That matters, because while remote is
 selected *every* command goes to the station on top, including `powerOff()` and
 `eraseBackup()`. If the switch back fails it is raised and also dispatched as an
 `error` event rather than quietly ignored.
