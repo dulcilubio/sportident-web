@@ -309,6 +309,15 @@
             Remote &mdash; the station standing on top
           </label>
           <button id="readRemote" disabled>Read the remote station</button>
+          <button id="cancelWake" class="quiet" hidden>Stop waking</button>
+          <p class="hint">
+            A sleeping station takes a while to rouse &mdash; 11 and 23 seconds
+            on the two measured here &mdash; so give it up to half a minute.
+          </p>
+        </div>
+        <div id="remotePanel" hidden>
+          <h2>Station on the stick</h2>
+          <dl class="facts" id="remoteFacts"></dl>
         </div>
       </section>
 

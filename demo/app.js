@@ -103,6 +103,8 @@ ui.disconnect.addEventListener('click', async () => {
   simulator = null;
   setStatus('', 'Nothing connected');
   $('currentMode').textContent = 'unknown';
+  $('remotePanel').hidden = true;
+  $('cancelWake').hidden = true;
   showMode();
   showTarget();
   ui.facts.replaceChildren();
@@ -250,6 +252,7 @@ function showTarget() {
 for (const radio of document.querySelectorAll('input[name="target"]')) {
   radio.addEventListener('change', async () => {
     if (!station) return;
+    station.addEventListener('waking', trackWaking);
     try {
       await station.setTarget(radio.value);
       write(
@@ -258,6 +261,14 @@ for (const radio of document.querySelectorAll('input[name="target"]')) {
           ? 'commands now go to the station on the coupling stick'
           : 'commands now go to the cabled station'
       );
+
+      // A station on the stick is asleep, and reading it cold would just fail.
+      if (radio.value === 'remote') {
+        const awake = await station.wake({ signal: wakeAbort() });
+        if (!awake) throw new Error('The station on the stick never answered. Is one there?');
+        write('rx', 'the remote station is awake');
+      }
+
       // Anything cached describes the other station, so read it again.
       await refreshFacts();
       showMode();
@@ -265,21 +276,90 @@ for (const radio of document.querySelectorAll('input[name="target"]')) {
       // A station that cannot relay leaves the radio lying about the target.
       showTarget();
       fail(error);
+    } finally {
+      station.removeEventListener('waking', trackWaking);
+      clearWaking();
+      $('cancelWake').hidden = true;
     }
   });
 }
 
+/**
+ * Show how far along the wake is.
+ *
+ * A station on the stick takes tens of seconds to rouse -- 11s and 22.8s on
+ * the two measured here -- so without this the page looks hung.
+ */
+function trackWaking(event) {
+  const { attempts, elapsed, timeout } = event.detail;
+  const bar = ui.progress.firstElementChild;
+  ui.progress.hidden = false;
+  bar.style.width = `${Math.min(100, Math.round((elapsed / timeout) * 100))}%`;
+  setStatus('warn', `Waking the remote station… ${Math.round(elapsed / 1000)}s, ${attempts} tries`);
+}
+
+function clearWaking() {
+  ui.progress.hidden = true;
+  ui.progress.firstElementChild.style.width = '0';
+}
+
 $('readRemote').addEventListener('click', () =>
   run(async () => {
-    const info = await station.withRemote(() => station.readInfo());
-    write(
-      'rx',
-      `remote station: ${info.modelName}, serial ${info.serialNumber}, ${info.modeName} mode, code ${info.code}`
-    );
-    // withRemote has already put us back on the cable.
-    showTarget();
+    station.addEventListener('waking', trackWaking);
+    try {
+      const info = await station.withRemote(() => station.readInfo(), { signal: wakeAbort() });
+      write(
+        'rx',
+        `remote station: ${info.modelName}, serial ${info.serialNumber}, ${info.modeName} mode, code ${info.code}`
+      );
+      showRemoteFacts(info);
+      setStatus('live', `Read ${info.modelName} on the coupling stick`);
+    } finally {
+      station.removeEventListener('waking', trackWaking);
+      clearWaking();
+      // withRemote has already put us back on the cable.
+      showTarget();
+    }
   })
 );
+
+/** Let the user call off a wake that is going nowhere. */
+let wakeController = null;
+function wakeAbort() {
+  wakeController = new AbortController();
+  $('cancelWake').hidden = false;
+  return wakeController.signal;
+}
+
+$('cancelWake').addEventListener('click', () => {
+  wakeController?.abort();
+  $('cancelWake').hidden = true;
+  write('err', 'wake cancelled');
+});
+
+/** The remote station's details, kept apart from the cabled one's. */
+function showRemoteFacts(info) {
+  const list = $('remoteFacts');
+  list.replaceChildren();
+  const rows = [
+    ['Model', info.modelName],
+    ['Serial number', String(info.serialNumber)],
+    ['Control code', String(info.code)],
+    ['Mode', info.modeName],
+    ['Firmware', info.firmware],
+    ['Battery', `${info.voltage.toFixed(2)} V`],
+  ];
+  for (const [label, value] of rows) {
+    const row = document.createElement('div');
+    const dt = document.createElement('dt');
+    dt.textContent = label;
+    const dd = document.createElement('dd');
+    dd.textContent = value;
+    row.append(dt, dd);
+    list.append(row);
+  }
+  $('remotePanel').hidden = false;
+}
 
 // ------------------------------------------------------------------- commands
 
