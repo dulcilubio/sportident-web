@@ -196,6 +196,9 @@
   .log .rx { color: #ffe27a; }
   .log .err { color: #ff8fb8; }
 
+  .battery[data-status='due'] { color: var(--contour); font-weight: 600; }
+  .battery[data-status='overdue'] { color: var(--overprint); font-weight: 700; }
+
   .status {
     display: inline-flex;
     align-items: center;
@@ -279,6 +282,10 @@
   </header>
 
   <p class="notice" id="support" hidden></p>
+  <label class="toggle" style="margin-top:10px">
+    <input type="checkbox" id="checkBattery" checked />
+    Look up SIAC battery dates online
+  </label>
 
   <div class="columns">
     <aside>

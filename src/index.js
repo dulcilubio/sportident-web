@@ -56,6 +56,14 @@ export {
   WebUsbTransport,
 } from './webusb.js';
 export {
+  describeBattery,
+  fetchSiacBattery,
+  isSiacNumber,
+  SIAC_BATTERY_API,
+  SIAC_RANGE,
+  SIBatteryLookupError,
+} from './battery.js';
+export {
   getGrantedStations,
   requestStation,
   toTransport,

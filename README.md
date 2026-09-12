@@ -358,6 +358,46 @@ The cabled station has to be in extended protocol mode to relay at all;
 `setRemote()` throws if it is not. Switching target clears the cached system
 data, since it described the other station.
 
+### SIAC battery dates
+
+A SIAC runs on a battery that cannot be replaced by the user and lasts a few
+years, and the card does not carry its own battery date. SPORTident publish a
+lookup, which this wraps:
+
+```js
+import { fetchSiacBattery, isSiacNumber } from 'sportident-web';
+
+if (isSiacNumber(card.cardNumber)) {
+  const battery = await fetchSiacBattery(card.cardNumber);
+  // { batteryDate, replaceBefore, status, daysRemaining, raw }
+}
+```
+
+`status` is `ok`, `due` (within 90 days), `overdue`, or `unknown`. A card
+SPORTident have no record of resolves to `null` rather than throwing. Only SIAC
+numbers (8000001 to 8999999) have a battery to ask about; anything else is
+refused before a request goes out.
+
+This is the one part of the library that needs the network, and it is entirely
+optional -- nothing else calls it. Two things to plan for:
+
+- **The CORS allowlist is narrow.** At the time of writing the API answers
+  browsers on `http://localhost:8080` and not much else: `localhost:3000`,
+  `127.0.0.1:8080` and a `github.io` origin were all refused. From another
+  origin the request fails with an opaque CORS error that looks exactly like
+  being offline. Ask SPORTident to allowlist your origin, pass `baseUrl` to
+  point at your own proxy, or call it from a server. Node has no CORS and just
+  works.
+- **Failures are normal.** A laptop at a finish tent often has no signal, so
+  every failure arrives as `SIBatteryLookupError` for you to ignore. Never let
+  it hold up showing a card that read perfectly well.
+
+SPORTident ask for a client id, which `support@sportident.com` issues:
+
+```js
+await fetchSiacBattery(8549150, { clientId: 'your-id' });
+```
+
 ### Backup memory
 
 ```js

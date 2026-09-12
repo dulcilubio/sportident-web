@@ -17,6 +17,8 @@
 import {
   BEACON_OLD_TO_NEW,
   backupFilename,
+  fetchSiacBattery,
+  isSiacNumber,
   backupToCsv,
   downloadText,
   formatDateTime,
@@ -529,6 +531,35 @@ $('detectCard').addEventListener('click', () =>
   })
 );
 
+// ------------------------------------------------------------- siac battery
+
+/** Fill in a card's battery note once SPORTident answer. */
+async function showBattery(cardNumber, note) {
+  try {
+    const battery = await fetchSiacBattery(cardNumber, { timeout: 6000 });
+    if (!battery) {
+      note.textContent = ' · battery date unknown';
+      return;
+    }
+
+    const due = battery.replaceBefore ? battery.replaceBefore.toLocaleDateString() : 'unknown';
+    const wording = {
+      ok: `battery good until ${due}`,
+      due: `battery due ${due}`,
+      overdue: `battery overdue since ${due}`,
+      unknown: 'battery date unknown',
+    };
+    note.textContent = ` · ${wording[battery.status]}`;
+    note.dataset.status = battery.status;
+    write('rx', `card ${cardNumber}: ${wording[battery.status]}`);
+  } catch (error) {
+    // Offline, or an origin the API will not talk to. Neither is worth a
+    // red error over a card that read perfectly well.
+    note.textContent = ' · battery not checked';
+    note.title = error.message;
+  }
+}
+
 // ------------------------------------------------------------------- commands
 
 $('beep').addEventListener('click', () => run(() => station.beep(2)));
@@ -622,6 +653,16 @@ function addCard(card) {
   );
   header.append(number, meta);
 
+  // A SIAC carries no battery date of its own, so it has to be looked up.
+  // Never let that hold up showing the card, and never let it fail loudly.
+  if (isSiacNumber(card.cardNumber) && $('checkBattery').checked) {
+    const note = document.createElement('span');
+    note.className = 'meta battery';
+    note.textContent = ' · checking battery…';
+    header.append(note);
+    showBattery(card.cardNumber, note);
+  }
+
   const table = document.createElement('table');
   table.innerHTML =
     '<thead><tr><th>#</th><th>Control</th><th>Time</th><th>Split</th></tr></thead>';
@@ -673,6 +714,16 @@ function addPunch(punch) {
     (punch.time ? formatTimeOfDay(punch.time) : 'no time') +
     (punch.recovered ? ' · read back from memory' : '');
   header.append(number, meta);
+
+  // A SIAC carries no battery date of its own, so it has to be looked up.
+  // Never let that hold up showing the card, and never let it fail loudly.
+  if (isSiacNumber(card.cardNumber) && $('checkBattery').checked) {
+    const note = document.createElement('span');
+    note.className = 'meta battery';
+    note.textContent = ' · checking battery…';
+    header.append(note);
+    showBattery(card.cardNumber, note);
+  }
   line.append(header);
   prepend(line);
 }
@@ -688,6 +739,16 @@ function showBackup(punches, info) {
   meta.className = 'meta';
   meta.append(strong(`${punches.length} punches`), document.createTextNode(' from the backup memory'));
   header.append(number, meta);
+
+  // A SIAC carries no battery date of its own, so it has to be looked up.
+  // Never let that hold up showing the card, and never let it fail loudly.
+  if (isSiacNumber(card.cardNumber) && $('checkBattery').checked) {
+    const note = document.createElement('span');
+    note.className = 'meta battery';
+    note.textContent = ' · checking battery…';
+    header.append(note);
+    showBattery(card.cardNumber, note);
+  }
 
   const table = document.createElement('table');
   table.innerHTML = '<thead><tr><th>#</th><th>Card</th><th>Punched</th><th></th></tr></thead>';

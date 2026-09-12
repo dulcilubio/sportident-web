@@ -223,6 +223,38 @@ export declare class WebSerialTransport implements SITransport {
   setBaudRate(baudRate: number): Promise<void>;
 }
 
+// ------------------------------------------------------------ siac battery
+
+export interface SIBattery {
+  cardNumber: number;
+  /** When the battery was made. */
+  batteryDate: Date | null;
+  /** When SPORTident recommend replacing it. */
+  replaceBefore: Date | null;
+  status: 'ok' | 'due' | 'overdue' | 'unknown';
+  /** Negative once overdue, null when unknown. */
+  daysRemaining: number | null;
+  /** The raw API body, so fields added later are not lost. */
+  raw: Record<string, unknown>;
+}
+
+export declare const SIAC_BATTERY_API: string;
+export declare const SIAC_RANGE: { first: number; last: number };
+export declare class SIBatteryLookupError extends SIError {}
+export declare function isSiacNumber(cardNumber: number): boolean;
+export declare function describeBattery(battery: SIBattery, now?: Date): SIBattery;
+/** Resolves null when SPORTident have no record of the card. */
+export declare function fetchSiacBattery(
+  cardNumber: number,
+  options?: {
+    clientId?: string;
+    signal?: AbortSignal;
+    timeout?: number;
+    baseUrl?: string;
+    fetch?: typeof globalThis.fetch;
+  }
+): Promise<SIBattery | null>;
+
 export declare function isWebSerialSupported(): boolean;
 export declare function requestPort(options?: { anyPort?: boolean }): Promise<SISerialPort>;
 export declare function getGrantedPorts(): Promise<SISerialPort[]>;
