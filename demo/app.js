@@ -26,8 +26,7 @@ import {
   hex,
   MODE,
   MODE_BY_NAME,
-  SIAC_FUNCTION,
-  SIAC_FUNCTION_NAMES,
+  siacFunctionByKey,
   requestStation,
   rowsToCsv,
   SimulatedTransport,
@@ -273,18 +272,14 @@ function showMode() {
     button.setAttribute('aria-pressed', String(active));
   }
 
-  // A SIAC special station is told apart by its control code, not its mode.
+  // A SIAC station is identified by mode and code together, so compare on the
+  // name the library resolved rather than on either byte.
   const current = station?.siacFunction ?? null;
   for (const button of document.querySelectorAll('button.siac')) {
-    const name = SIAC_FUNCTION_NAMES[SIAC_FUNCTION[keyFor(button.dataset.siac)]];
-    button.setAttribute('aria-pressed', String(current !== null && current === name));
+    const wanted = siacFunctionByKey(button.dataset.siac);
+    button.setAttribute('aria-pressed', String(current !== null && current === wanted?.name));
   }
 }
-
-const keyFor = (name) =>
-  ({ on: 'ON', off: 'OFF', 'battery-test': 'BATTERY_TEST', 'radio-readout': 'RADIO_READOUT' })[
-    name
-  ];
 
 for (const button of document.querySelectorAll('button.siac')) {
   button.addEventListener('click', () =>

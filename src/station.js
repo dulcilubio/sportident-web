@@ -30,8 +30,10 @@ import {
   P_MS_INDIRECT,
   REMOTE_OFF,
   SUPPORTED_MODES,
-  SIAC_FUNCTION_BY_NAME,
-  SIAC_FUNCTION_NAMES,
+  SIAC_FUNCTIONS,
+  SIAC_MODES,
+  siacFunctionByKey,
+  siacFunctionFor,
   SUPPORTED_READ_BACKUP_MODES,
   WAKE_TIMEOUT,
   ACK,
@@ -440,10 +442,11 @@ export class SIStation extends EventTarget {
    * told apart by the control code, so the code has to be read to name it.
    */
   #describeMode(mode) {
-    if (mode === MODE.SIAC_SPECIAL) {
+    if (SIAC_MODES.includes(mode)) {
       const code = this.#field(O.STATION_CODE, 1)[0] | ((this.#field(O.FEEDBACK, 1)[0] >> 6) << 8);
-      const named = SIAC_FUNCTION_NAMES[code];
-      return named ?? `SIAC special (code ${code})`;
+      const found = siacFunctionFor(mode, code);
+      // An unrecognised pair gets named for what it is, not guessed at.
+      return found ? found.name : `SIAC special (mode 0x${mode.toString(16)}, code ${code})`;
     }
     return MODE_NAMES[mode] ?? `0x${mode.toString(16).padStart(2, '0')}`;
   }
@@ -832,21 +835,21 @@ export class SIStation extends EventTarget {
    * @returns {Promise<{mode: number, code: number, name: string}>}
    */
   async setSiacFunction(name) {
-    const code = SIAC_FUNCTION_BY_NAME[String(name).trim().toLowerCase()];
-    if (code === undefined) {
+    const wanted = siacFunctionByKey(String(name).trim().toLowerCase());
+    if (!wanted) {
       throw new SIProtocolError(
         `Unknown SIAC function "${name}". Use one of: ` +
-          `${Object.keys(SIAC_FUNCTION_BY_NAME).join(', ')}.`
+          `${SIAC_FUNCTIONS.map((f) => f.key).join(', ')}.`
       );
     }
 
     // Code first: while it is being written the station is still in its old
     // mode, so a half-done change leaves something harmless rather than a
     // SIAC station performing the wrong function.
-    await this.setStationCode(code);
-    await this.setModeByte(MODE.SIAC_SPECIAL);
+    await this.setStationCode(wanted.code);
+    await this.setModeByte(wanted.mode);
 
-    return { mode: this.mode, code, name: SIAC_FUNCTION_NAMES[code] };
+    return { mode: this.mode, code: wanted.code, name: wanted.name };
   }
 
   /**
@@ -854,10 +857,10 @@ export class SIStation extends EventTarget {
    * in that mode at all.
    */
   get siacFunction() {
-    if (this.mode !== MODE.SIAC_SPECIAL) return null;
-    const code = this.protoConfig ? this.#field(O.STATION_CODE, 1)[0] : null;
-    if (code === null) return null;
-    return SIAC_FUNCTION_NAMES[code] ?? null;
+    const mode = this.mode;
+    if (mode === null || !SIAC_MODES.includes(mode) || !this.protoConfig) return null;
+    const code = this.#field(O.STATION_CODE, 1)[0] | ((this.#field(O.FEEDBACK, 1)[0] >> 6) << 8);
+    return siacFunctionFor(mode, code)?.name ?? null;
   }
 
   /** The mode the station is in right now, as a number. */

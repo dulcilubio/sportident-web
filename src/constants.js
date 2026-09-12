@@ -167,39 +167,45 @@ export const MODE = {
 };
 
 /**
- * The SIAC special functions.
+ * The SIAC special functions. A station in one of these does nothing else.
  *
- * These are not separate modes. The station sits in MODE.SIAC_SPECIAL (0x01)
- * and the control code says which function it performs, which is why Config+
- * will not let you edit the code in these modes -- it owns that field.
+ * They are identified by a mode byte *and* a control code together, not by
+ * either alone: code 124 means SIAC ON at mode 0x01 and SIAC test at 0x11.
+ * That is also why Config+ will not let you edit the code in these modes -- it
+ * owns that field.
  *
- * Read off four BSF8s (firmware 656) configured with Config+. SPORTident
- * document the four functions but publish none of these numbers.
+ * Read off five BSF8s (firmware 656) set with Config+, each confirmed twice.
+ * SPORTident document the functions but publish none of these numbers, and
+ * sireader2.py has only mode 0x01 with the comment "SIAC special (ON, OFF,
+ * Radio_ReadOut, etc.)".
  *
- * 126 sits unused between OFF and radio readout. Something may well live
- * there; nothing here claims to know what.
+ * Two loose ends, recorded rather than guessed at:
+ *
+ * - Code 126 at mode 0x01 is unused by any station seen here.
+ * - The SIAC test station also carried PROGRAM 0x30 where the other four had
+ *   0x38. Whether that bit matters to how the station behaves is unknown, so
+ *   nothing here writes it.
  */
-export const SIAC_FUNCTION = {
-  BATTERY_TEST: 123,
-  ON: 124,
-  OFF: 125,
-  RADIO_READOUT: 127,
-};
+export const SIAC_FUNCTIONS = [
+  { key: 'battery-test', name: 'SIAC battery test', mode: 0x01, code: 123 },
+  { key: 'on', name: 'SIAC ON', mode: 0x01, code: 124 },
+  { key: 'off', name: 'SIAC OFF', mode: 0x01, code: 125 },
+  { key: 'radio-readout', name: 'SIAC radio readout', mode: 0x01, code: 127 },
+  { key: 'test', name: 'SIAC test', mode: 0x11, code: 124 },
+];
 
-export const SIAC_FUNCTION_NAMES = {
-  [SIAC_FUNCTION.BATTERY_TEST]: 'SIAC battery test',
-  [SIAC_FUNCTION.ON]: 'SIAC ON',
-  [SIAC_FUNCTION.OFF]: 'SIAC OFF',
-  [SIAC_FUNCTION.RADIO_READOUT]: 'SIAC radio readout',
-};
+/** Every mode byte that means "a SIAC special function". */
+export const SIAC_MODES = [0x01, 0x11];
 
-/** Names accepted by setSiacFunction(). */
-export const SIAC_FUNCTION_BY_NAME = {
-  'battery-test': SIAC_FUNCTION.BATTERY_TEST,
-  on: SIAC_FUNCTION.ON,
-  off: SIAC_FUNCTION.OFF,
-  'radio-readout': SIAC_FUNCTION.RADIO_READOUT,
-};
+/** Look one up by the pair that identifies it. */
+export function siacFunctionFor(mode, code) {
+  return SIAC_FUNCTIONS.find((f) => f.mode === mode && f.code === code) ?? null;
+}
+
+/** Look one up by the name setSiacFunction() takes. */
+export function siacFunctionByKey(key) {
+  return SIAC_FUNCTIONS.find((f) => f.key === key) ?? null;
+}
 
 /** Older beacon mode byte -> the form newer stations want. */
 export const BEACON_OLD_TO_NEW = {

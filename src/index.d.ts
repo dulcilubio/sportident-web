@@ -137,16 +137,22 @@ export type SIStationTarget = 'direct' | 'remote';
 
 export declare const MODE_BY_NAME: Record<SIModeName, number>;
 
-/** SIAC special functions, selected by control code within mode 0x01. */
-export type SIACFunctionName = 'on' | 'off' | 'battery-test' | 'radio-readout';
-export declare const SIAC_FUNCTION: {
-  BATTERY_TEST: number;
-  ON: number;
-  OFF: number;
-  RADIO_READOUT: number;
-};
-export declare const SIAC_FUNCTION_NAMES: Record<number, string>;
-export declare const SIAC_FUNCTION_BY_NAME: Record<SIACFunctionName, number>;
+/** SIAC special functions, identified by a mode byte and a control code. */
+export type SIACFunctionName = 'on' | 'off' | 'battery-test' | 'radio-readout' | 'test';
+
+export interface SIACFunction {
+  key: SIACFunctionName;
+  name: string;
+  mode: number;
+  code: number;
+}
+
+export declare const SIAC_FUNCTIONS: SIACFunction[];
+/** Mode bytes that mean "a SIAC special function". */
+export declare const SIAC_MODES: number[];
+/** Null when the pair is not one this library knows. */
+export declare function siacFunctionFor(mode: number, code: number): SIACFunction | null;
+export declare function siacFunctionByKey(key: string): SIACFunction | null;
 
 export type SICardType = 'SI5' | 'SI6' | 'SI8' | 'SI9' | 'SI10' | 'pCard';
 

@@ -271,11 +271,8 @@ long enough to cover the whole event.
 
 #### SIAC special functions
 
-SPORTident stations can be set to one of four SIAC functions, and a station in
-one of these does nothing else. They are **not** four modes: the station sits in
-`MODE.SIAC_SPECIAL` (`0x01`) and the **control code** picks the function, which
-is why Config+ will not let you edit the code in these modes -- it owns that
-field.
+SPORTident stations can be set to one of five SIAC functions, and a station in
+one of these does nothing else.
 
 ```js
 await station.setSiacFunction('off');
@@ -289,19 +286,32 @@ station.siacFunction;   // 'SIAC OFF'
 | SIAC ON | `0x01` | 124 |
 | SIAC OFF | `0x01` | 125 |
 | SIAC radio readout | `0x01` | 127 |
+| SIAC test | `0x11` | 124 |
 
-These numbers were read off four BSF8s (firmware 656) configured with Config+.
-SPORTident document the four functions but publish none of the values, and
-`sireader2.py` has only `0x01` with the comment "SIAC special (ON, OFF,
-Radio_ReadOut, etc.)".
+A function is identified by **both** bytes, not either alone: code 124 means
+SIAC ON at mode `0x01` and SIAC test at `0x11`. Matching on the code by itself
+silently confuses the two. That pairing is also why Config+ will not let you
+edit the code in these modes -- it owns that field -- and why setting the mode
+byte alone is worth avoiding: the station lands in the SIAC family with
+whatever code it already had, quite likely the wrong function.
+`setSiacFunction()` writes the code first and the mode second, so a
+half-finished change leaves a harmless station rather than one doing the wrong
+job.
 
-Note the gap at 126. Something may well live there; nothing here claims to know
-what, and a station found sitting on an unrecognised code is reported as
-`SIAC special (code 126)` rather than being given an invented meaning.
+These numbers were read off five BSF8s (firmware 656) set with Config+, the
+surprising one twice. SPORTident document the functions but publish none of the
+values, and `sireader2.py` has only mode `0x01` with the comment "SIAC special
+(ON, OFF, Radio_ReadOut, etc.)".
 
-Setting the mode byte on its own is not enough, and is worth avoiding: the
-station would land in the SIAC family with whatever code it already had, which
-is very likely the wrong function.
+Two loose ends, recorded rather than guessed at:
+
+- Code 126 at mode `0x01` is unused by any station seen here. One found sitting
+  there reports as `SIAC special (mode 0x1, code 126)` rather than being given
+  an invented meaning.
+- The SIAC test station also carried `PROGRAM` `0x30` where the other four had
+  `0x38`. Whether that bit matters to how the station behaves is unknown, so
+  nothing here writes it -- worth checking against a real SIAC if you rely on
+  this function.
 
 #### Modes nobody has published
 
