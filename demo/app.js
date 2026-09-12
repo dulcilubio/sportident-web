@@ -143,15 +143,19 @@ async function attach(next) {
   showMode();
   showTarget();
   showPunchMode();
+  showFeedback();
   setControlsEnabled(true);
   setStatus('live', 'Connected and listening');
 }
 
 // -------------------------------------------------------------- station panel
 
+let lastInfo = null;
+
 async function refreshFacts() {
   if (!station) return;
   const info = await station.readInfo();
+  lastInfo = info;
   const offset = await station.getClockOffset();
 
   setCircle(info.code);
@@ -171,7 +175,19 @@ async function refreshFacts() {
     ['Protocol', info.extendedProtocol ? 'Extended' : 'Legacy'],
     ['Sends punches live', info.autoSend ? 'Yes' : 'No'],
     ['Clock difference', offset === null ? 'unreadable' : `${(offset / 1000).toFixed(2)} s`],
+    ['Beeps on punch', info.audibleFeedback ? 'Yes' : 'No'],
+    ['Flashes on punch', info.opticalFeedback ? 'Yes' : 'No'],
+    ['Built', info.buildDate],
+    ['Battery fitted', info.batteryDate],
+    ['Battery capacity', `${info.batteryCapacityMah} mAh`],
+    ['Mode byte', `0x${info.mode.toString(16).padStart(2, '0')}`],
+    ['Protocol byte', `0x${info.protocolByte.toString(16).padStart(2, '0')}`],
+    ['Feedback byte', `0x${info.feedbackByte.toString(16).padStart(2, '0')}`],
   ];
+
+  $('toggleProtocol').textContent = info.extendedProtocol
+    ? 'Switch to legacy protocol'
+    : 'Switch to extended protocol';
 
   ui.facts.replaceChildren(
     ...rows.map(([label, value]) => {
@@ -205,7 +221,8 @@ function setStatus(kind, text) {
 function setControlsEnabled(enabled) {
   for (const id of [
     'beep', 'syncClock', 'readBackup', 'eraseBackup', 'saveSysval', 'powerOff',
-    'detectCard',
+    'detectCard', 'setCode', 'codeInput', 'fbBeeper', 'fbLamp',
+    'activeInput', 'setActive', 'toggleProtocol', 'powerOffRemote',
   ]) {
     $(id).disabled = !enabled;
   }
@@ -388,6 +405,72 @@ function showRemoteFacts(info) {
   }
   $('remotePanel').hidden = false;
 }
+
+// ------------------------------------------------------ code, feedback, awake
+
+$('setCode').addEventListener('click', () =>
+  run(async () => {
+    const code = Number($('codeInput').value);
+    await station.setStationCode(code);
+    await refreshFacts();
+    showFeedback();
+    // Read it back rather than echoing what was asked for: codes above 255
+    // split across two bytes, so a mismatch here is worth seeing.
+    write('tx', `control code is now ${lastInfo?.code ?? code}`);
+  })
+);
+
+/** Tick boxes reflect the station, and changing one writes it straight away. */
+function showFeedback() {
+  const info = lastInfo;
+  if (!info) return;
+  $('fbBeeper').checked = info.audibleFeedback;
+  $('fbLamp').checked = info.opticalFeedback;
+  $('codeInput').value = String(info.code);
+  $('activeInput').value = String(info.activeTimeMinutes);
+}
+
+async function applyFeedback() {
+  await station.setFeedback({
+    audible: $('fbBeeper').checked,
+    optical: $('fbLamp').checked,
+  });
+  await refreshFacts();
+  write(
+    'tx',
+    `feedback: beeper ${$('fbBeeper').checked ? 'on' : 'off'}, ` +
+      `lamp ${$('fbLamp').checked ? 'on' : 'off'}`
+  );
+}
+
+$('fbBeeper').addEventListener('change', () => run(applyFeedback));
+$('fbLamp').addEventListener('change', () => run(applyFeedback));
+
+$('setActive').addEventListener('click', () =>
+  run(async () => {
+    const minutes = Number($('activeInput').value);
+    await station.setActiveTime(minutes);
+    await refreshFacts();
+    write('tx', `stays awake for ${minutes} minutes`);
+  })
+);
+
+$('toggleProtocol').addEventListener('click', () =>
+  run(async () => {
+    const toExtended = !lastInfo?.extendedProtocol;
+    await station.setExtendedProtocol(toExtended);
+    await refreshFacts();
+    write('tx', `protocol is now ${toExtended ? 'extended' : 'legacy'}`);
+  })
+);
+
+$('powerOffRemote').addEventListener('click', () =>
+  run(async () => {
+    await station.powerOffRemote();
+    write('tx', 'sent the switch-off sequence to the remote station');
+    setStatus('warn', 'Remote station switched off');
+  })
+);
 
 // ------------------------------------------------------------- punch handling
 

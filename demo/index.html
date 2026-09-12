@@ -226,6 +226,20 @@
   .hint strong { color: var(--detail); }
 
   .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+  .row { display: flex; gap: 8px; }
+  .row input { flex: 1; min-width: 0; }
+
+  input[type='number'] {
+    font: inherit;
+    font-family: var(--font-data);
+    padding: 8px 10px;
+    border: 2px solid var(--detail);
+    border-radius: 2px;
+    background: var(--paper);
+    color: var(--detail);
+  }
+  input[type='number']:disabled { opacity: 0.35; }
   /* The mode the station is actually in, shown the way a punched control is. */
   button.mode[aria-pressed='true'] {
     background: var(--overprint);
@@ -354,6 +368,49 @@
       </section>
 
       <section>
+        <h2>Control code</h2>
+        <div class="stack">
+          <div class="row">
+            <input id="codeInput" type="number" min="1" max="1023" step="1"
+                   value="31" disabled aria-label="Control code" />
+            <button id="setCode" disabled>Set code</button>
+          </div>
+          <p class="hint">
+            1 to 1023. Codes above 255 keep their top bits in the feedback
+            byte, so the station writes both at once.
+          </p>
+        </div>
+      </section>
+
+      <section>
+        <h2>Punch feedback</h2>
+        <div class="stack">
+          <label class="toggle">
+            <input type="checkbox" id="fbBeeper" disabled /> Beep on a punch
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="fbLamp" disabled /> Flash on a punch
+          </label>
+          <p class="hint">
+            Applied to the station as you tick them. Use the beep button below
+            to hear the difference.
+          </p>
+        </div>
+      </section>
+
+      <section>
+        <h2>Awake time</h2>
+        <div class="stack">
+          <div class="row">
+            <input id="activeInput" type="number" min="1" max="5759" step="1"
+                   value="240" disabled aria-label="Minutes awake" />
+            <button id="setActive" disabled>Set minutes</button>
+          </div>
+          <p class="hint">How long the station stays awake after a punch. Max 5759.</p>
+        </div>
+      </section>
+
+      <section>
         <h2>Set up</h2>
         <div class="stack">
           <button id="beep" disabled>Beep the station</button>
@@ -362,6 +419,8 @@
           <button id="eraseBackup" disabled>Erase backup memory</button>
           <button id="saveSysval" disabled>Download configuration</button>
           <button id="powerOff" disabled>Switch the station off</button>
+          <button id="powerOffRemote" disabled>Switch the remote station off</button>
+          <button id="toggleProtocol" disabled>Switch to legacy protocol</button>
           <div class="progress" id="progress" hidden><i></i></div>
         </div>
       </section>

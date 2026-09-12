@@ -109,3 +109,46 @@ test('detecting is skipped while a read is already running', async () => {
   assert.notEqual(await station.detectCard({ read: false }), null);
   await station.disconnect();
 });
+
+test('a code above 255 survives a later feedback change', async () => {
+  // The top two bits of the code live in the feedback byte, so writing
+  // feedback naively wipes them: code 300 collapses to 44.
+  const { station } = readout();
+  await station.connect();
+
+  await station.setStationCode(300);
+  assert.equal((await station.readInfo()).code, 300);
+
+  await station.setFeedback({ audible: false, optical: true });
+  const info = await station.readInfo();
+
+  assert.equal(info.code, 300, 'the high bits were preserved');
+  assert.equal(info.audibleFeedback, false);
+  assert.equal(info.opticalFeedback, true);
+
+  await station.disconnect();
+});
+
+test('setting feedback leaves the code alone in both directions', async () => {
+  const { station } = readout();
+  await station.connect();
+  await station.setStationCode(1023); // both high bits set
+
+  for (const [audible, optical] of [[true, true], [false, false], [true, false]]) {
+    await station.setFeedback({ audible, optical });
+    const info = await station.readInfo();
+    assert.equal(info.code, 1023, `code survived ${audible}/${optical}`);
+    assert.equal(info.audibleFeedback, audible);
+    assert.equal(info.opticalFeedback, optical);
+  }
+
+  await station.disconnect();
+});
+
+test('an out of range control code is refused', async () => {
+  const { station } = readout();
+  await station.connect();
+  await assert.rejects(() => station.setStationCode(0), /between 1 and 1023/);
+  await assert.rejects(() => station.setStationCode(1024), /between 1 and 1023/);
+  await station.disconnect();
+});
