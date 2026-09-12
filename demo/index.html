@@ -368,6 +368,24 @@
       </section>
 
       <section>
+        <h2>Any mode byte</h2>
+        <div class="stack">
+          <div class="row">
+            <input id="modeByte" type="text" value="0x01" disabled
+                   aria-label="Mode byte in hex" />
+            <button id="setModeByte" disabled>Write it</button>
+          </div>
+          <p class="hint">
+            For modes nobody has published. SPORTident documents four SIAC
+            special modes &mdash; SIAC&nbsp;ON, SIAC&nbsp;OFF, Radio&nbsp;Readout
+            and Battery&nbsp;Test &mdash; without giving their values. To find
+            one: set a station to it in Config+, read it here, and the mode byte
+            appears in the facts panel.
+          </p>
+        </div>
+      </section>
+
+      <section>
         <h2>Control code</h2>
         <div class="stack">
           <div class="row">
@@ -406,7 +424,12 @@
                    value="240" disabled aria-label="Minutes awake" />
             <button id="setActive" disabled>Set minutes</button>
           </div>
-          <p class="hint">How long the station stays awake after a punch. Max 5759.</p>
+          <p class="hint">
+            How long the station stays awake after a punch. Max 5759. In AIR+
+            mode a contactless punch does <em>not</em> restart it &mdash; only a
+            direct punch does &mdash; so allow for the whole event: SPORTident
+            suggests 720 (12 hours).
+          </p>
         </div>
       </section>
 

@@ -775,6 +775,36 @@ export class SIStation extends EventTarget {
     }
   }
 
+  /**
+   * Write the mode byte with no questions asked.
+   *
+   * `setOperatingMode()` only accepts modes this library knows, which is the
+   * right default but blocks the ones nobody has written down. The SIAC
+   * special modes are the live example: SPORTident documents four of them --
+   * SIAC ON, SIAC OFF, Radio Readout and Battery Test -- and says the code
+   * number does not apply to them, so each must be its own mode byte, but
+   * publishes no values. sireader2.py knows only 0x01, vaguely, as "SIAC
+   * special (ON, OFF, Radio_ReadOut, etc.)".
+   *
+   * The way to find one is to read it off a station that Config+ has already
+   * set, then write that byte here.
+   *
+   * @param {number} byte 0 to 255
+   * @returns {Promise<number>} the byte the station reports afterwards, which
+   *   is not always the byte you sent
+   */
+  async setModeByte(byte) {
+    if (!Number.isInteger(byte) || byte < 0 || byte > 0xff) {
+      throw new SIProtocolError(`A mode byte is 0 to 255, got ${byte}`);
+    }
+    try {
+      await this.sendCommand(CMD.SET_SYS_VAL, [O.MODE, byte]);
+    } finally {
+      await this.refreshSysval();
+    }
+    return this.mode;
+  }
+
   /** The mode the station is in right now, as a number. */
   get mode() {
     return this.protoConfig?.mode ?? null;

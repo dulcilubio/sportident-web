@@ -152,3 +152,27 @@ test('an out of range control code is refused', async () => {
   await assert.rejects(() => station.setStationCode(1024), /between 1 and 1023/);
   await station.disconnect();
 });
+
+test('setModeByte writes values setOperatingMode will not', async () => {
+  const { station } = readout();
+  await station.connect();
+
+  // 0x01 is the SIAC special family: real, documented by SPORTident, and not
+  // in SUPPORTED_MODES, so the guarded call refuses it.
+  await assert.rejects(() => station.setOperatingMode(0x01), /Cannot set mode 0x1/);
+
+  const got = await station.setModeByte(0x01);
+  assert.equal(got, 0x01, 'the raw write went through');
+  assert.equal(station.modeName, 'SIAC special');
+
+  await station.disconnect();
+});
+
+test('setModeByte still refuses things that are not a byte', async () => {
+  const { station } = readout();
+  await station.connect();
+  for (const bad of [-1, 256, 1.5, 'off', null]) {
+    await assert.rejects(() => station.setModeByte(bad), /A mode byte is 0 to 255/);
+  }
+  await station.disconnect();
+});

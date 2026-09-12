@@ -222,6 +222,7 @@ function setControlsEnabled(enabled) {
   for (const id of [
     'beep', 'syncClock', 'readBackup', 'eraseBackup', 'saveSysval', 'powerOff',
     'detectCard', 'setCode', 'codeInput', 'fbBeeper', 'fbLamp',
+    'modeByte', 'setModeByte',
     'activeInput', 'setActive', 'toggleProtocol', 'powerOffRemote',
   ]) {
     $(id).disabled = !enabled;
@@ -407,6 +408,24 @@ function showRemoteFacts(info) {
 }
 
 // ------------------------------------------------------ code, feedback, awake
+
+$('setModeByte').addEventListener('click', () =>
+  run(async () => {
+    const raw = $('modeByte').value.trim();
+    const byte = Number(raw.startsWith('0x') || raw.startsWith('0X') ? raw : `0x${raw}`);
+    if (!Number.isInteger(byte)) throw new Error(`"${raw}" is not a byte`);
+
+    const got = await station.setModeByte(byte);
+    await refreshFacts();
+    showMode();
+    // Stations quietly remap some values, so report what came back.
+    write(
+      'tx',
+      `mode byte 0x${byte.toString(16).padStart(2, '0')} written, station reports ` +
+        `0x${got.toString(16).padStart(2, '0')} (${station.modeName})`
+    );
+  })
+);
 
 $('setCode').addEventListener('click', () =>
   run(async () => {

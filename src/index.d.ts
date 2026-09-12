@@ -362,6 +362,8 @@ export declare class SIStation extends EventTarget {
   setAutoSend(autoSend?: boolean): Promise<void>;
   /** @returns the mode byte the station accepted, which may differ for beacon modes */
   setOperatingMode(mode: number | SIModeName): Promise<number>;
+  /** Write the mode byte unchecked, for modes this library does not name. */
+  setModeByte(byte: number): Promise<number>;
   setStartMode(): Promise<void>;
   setCheckMode(): Promise<void>;
   setFinishMode(): Promise<void>;

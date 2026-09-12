@@ -264,6 +264,30 @@ Both encodings decode to the same name, so `modeName` reads `BC control`
 either way. `sireader2.py` documents only the older set, which is why a station
 in this mode shows up there as an unknown byte.
 
+A beacon station keeps taking contact punches as well: Air+ is added to classic
+punching, not swapped for it. Note that in Air+ mode a contactless punch does
+not restart the station's awake time -- only a direct punch does -- so set it
+long enough to cover the whole event.
+
+#### Modes nobody has published
+
+SPORTident documents four SIAC special modes -- SIAC ON, SIAC OFF, Radio
+Readout and Battery Test -- and says the code number does not apply to them, so
+each has to be its own mode byte. The values are not published anywhere, and
+`sireader2.py` has only `0x01`, vaguely, as "SIAC special (ON, OFF,
+Radio_ReadOut, etc.)".
+
+`setModeByte()` writes the mode byte unchecked for exactly this case:
+
+```js
+await station.setModeByte(0x01);
+station.modeName;              // 'SIAC special'
+```
+
+The way to find a value is to set a station to the mode in Config+ and read the
+byte back -- `readInfo().mode`, or the mode byte shown in the demo's facts
+panel. That is how the two beacon encodings were pinned down.
+
 ### Direct and remote
 
 A cabled station can relay to a second one standing on its coupling stick, which
