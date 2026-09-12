@@ -26,7 +26,7 @@ import {
   hex,
   MODE,
   MODE_BY_NAME,
-  siacFunctionByKey,
+  SIAC_FUNCTIONS,
   requestStation,
   rowsToCsv,
   SimulatedTransport,
@@ -225,14 +225,11 @@ function setControlsEnabled(enabled) {
   for (const id of [
     'beep', 'syncClock', 'readBackup', 'eraseBackup', 'saveSysval', 'powerOff',
     'detectCard', 'setCode', 'codeInput', 'fbBeeper', 'fbLamp',
-    'modeByte', 'setModeByte',
     'activeInput', 'setActive', 'toggleProtocol', 'powerOffRemote',
   ]) {
     $(id).disabled = !enabled;
   }
-  for (const button of document.querySelectorAll('button.mode, button.siac')) {
-    button.disabled = !enabled;
-  }
+  $('modeSelect').disabled = !enabled;
   for (const radio of document.querySelectorAll('input[name="target"]')) {
     radio.disabled = !enabled;
   }
@@ -250,66 +247,66 @@ function setControlsEnabled(enabled) {
 // ------------------------------------------------- operating mode and target
 
 /**
- * Which mode bytes a button stands for.
+ * Show what the station is doing, and which station that is.
  *
- * Beacon modes have two encodings -- older stations use 0x12..0x15, newer ones
- * the same values 0x20 higher -- and a button has to light up for either, so
- * matching is done on the byte rather than on the displayed name.
+ * The dropdown is driven from the station, never the other way round, so one
+ * reconfigured elsewhere shows up as it really is rather than as whatever was
+ * last picked here.
  */
-function bytesFor(modeName) {
-  const base = MODE_BY_NAME[modeName];
-  if (base === undefined) return [];
-  const newer = BEACON_OLD_TO_NEW[base];
-  return newer === undefined ? [base] : [base, newer];
-}
-
-/** Reflect the station's real mode in the button rows. */
 function showMode() {
-  const mode = station?.mode ?? null;
   $('currentMode').textContent = station?.modeName ?? 'unknown';
-  for (const button of document.querySelectorAll('button.mode')) {
-    const active = mode !== null && bytesFor(button.dataset.mode).includes(mode);
-    button.setAttribute('aria-pressed', String(active));
+  $('modeTarget').textContent =
+    station?.target === 'remote' ? 'the station on the stick' : 'the cabled station';
+
+  const select = $('modeSelect');
+  const siac = station?.siacFunction ?? null;
+  const mode = station?.mode ?? null;
+  let value = '';
+
+  if (siac) {
+    const match = SIAC_FUNCTIONS.find((f) => f.name === siac);
+    if (match) value = `siac:${match.key}`;
+  } else if (mode !== null) {
+    // Beacon modes have two encodings; both pick the same entry.
+    for (const [name, base] of Object.entries(MODE_BY_NAME)) {
+      if (mode === base || mode === BEACON_OLD_TO_NEW[base]) {
+        value = `mode:${name}`;
+        break;
+      }
+    }
   }
 
-  // A SIAC station is identified by mode and code together, so compare on the
-  // name the library resolved rather than on either byte.
-  const current = station?.siacFunction ?? null;
-  for (const button of document.querySelectorAll('button.siac')) {
-    const wanted = siacFunctionByKey(button.dataset.siac);
-    button.setAttribute('aria-pressed', String(current !== null && current === wanted?.name));
-  }
+  select.value = value;
+  // A mode with no entry (an unrecognised SIAC pair, say) selects nothing
+  // rather than pointing at the wrong one.
+  if (select.value !== value) select.selectedIndex = -1;
 }
 
-for (const button of document.querySelectorAll('button.siac')) {
-  button.addEventListener('click', () =>
-    run(async () => {
-      const result = await station.setSiacFunction(button.dataset.siac);
-      await refreshFacts();
-      showMode();
-      showFeedback();
-      write('tx', `${result.name}: mode 0x01, control code ${result.code}`);
-    })
-  );
-}
+$('modeSelect').addEventListener('change', (event) =>
+  run(async () => {
+    const [kind, key] = event.target.value.split(':');
 
-for (const button of document.querySelectorAll('button.mode')) {
-  button.addEventListener('click', () =>
-    run(async () => {
-      const accepted = await station.setOperatingMode(button.dataset.mode);
-      showMode();
+    if (kind === 'siac') {
+      const result = await station.setSiacFunction(key);
       await refreshFacts();
-
-      // Beacon modes may land on either encoding; say which the station took.
-      const asked = bytesFor(button.dataset.mode)[0];
+      write(
+        'tx',
+        `${result.name}: mode 0x${result.mode.toString(16).padStart(2, '0')}, ` +
+          `control code ${result.code}`
+      );
+    } else {
+      const accepted = await station.setOperatingMode(key);
+      await refreshFacts();
       const note =
-        accepted === asked
+        accepted === MODE_BY_NAME[key]
           ? ''
           : ` (station wanted the newer 0x${accepted.toString(16)} form)`;
       write('tx', `mode is now ${station.modeName}${note}`);
-    })
-  );
-}
+    }
+
+    showFeedback();
+  }).then(showMode, showMode)
+);
 
 /** Move the radio back to where the hardware actually is. */
 function showTarget() {
@@ -386,8 +383,14 @@ $('readRemote').addEventListener('click', () =>
     } finally {
       station.removeEventListener('waking', trackWaking);
       clearWaking();
-      // withRemote has already put us back on the cable.
+
+      // withRemote has already put us back on the cable, but everything on
+      // screen still describes the station on the stick. Re-read the cabled
+      // one so the mode and facts panels agree with where commands now go.
       showTarget();
+      await refreshFacts().catch(() => {});
+      showMode();
+      showFeedback();
     }
   })
 );
@@ -411,10 +414,12 @@ function showRemoteFacts(info) {
   const list = $('remoteFacts');
   list.replaceChildren();
   const rows = [
+    ['Read at', new Date().toLocaleTimeString()],
     ['Model', info.modelName],
     ['Serial number', String(info.serialNumber)],
     ['Control code', String(info.code)],
     ['Mode', info.modeName],
+    ['Mode byte', `0x${info.mode.toString(16).padStart(2, '0')}`],
     ['Firmware', info.firmware],
     ['Battery', `${info.voltage.toFixed(2)} V`],
   ];
@@ -431,24 +436,6 @@ function showRemoteFacts(info) {
 }
 
 // ------------------------------------------------------ code, feedback, awake
-
-$('setModeByte').addEventListener('click', () =>
-  run(async () => {
-    const raw = $('modeByte').value.trim();
-    const byte = Number(raw.startsWith('0x') || raw.startsWith('0X') ? raw : `0x${raw}`);
-    if (!Number.isInteger(byte)) throw new Error(`"${raw}" is not a byte`);
-
-    const got = await station.setModeByte(byte);
-    await refreshFacts();
-    showMode();
-    // Stations quietly remap some values, so report what came back.
-    write(
-      'tx',
-      `mode byte 0x${byte.toString(16).padStart(2, '0')} written, station reports ` +
-        `0x${got.toString(16).padStart(2, '0')} (${station.modeName})`
-    );
-  })
-);
 
 $('setCode').addEventListener('click', () =>
   run(async () => {

@@ -9,7 +9,7 @@ import { test } from 'node:test';
 
 import { SIReadout } from '../src/readout.js';
 import { SimulatedTransport } from '../src/simulator.js';
-import { MODE } from '../src/constants.js';
+import { MODE, O } from '../src/constants.js';
 
 function readout(options = {}) {
   const sim = new SimulatedTransport({ latency: 0, mode: MODE.READOUT });
@@ -176,5 +176,53 @@ test('setModeByte still refuses things that are not a byte', async () => {
   for (const bad of [-1, 256, 1.5, 'off', null]) {
     await assert.rejects(() => station.setModeByte(bad), /A mode byte is 0 to 255/);
   }
+  await station.disconnect();
+});
+
+test('readInfo re-reads the station rather than serving connect-time state', async () => {
+  const { sim, station } = readout();
+  await station.connect();
+  assert.equal((await station.readInfo()).modeName, 'Readout');
+
+  // Something else reconfigures the station: Config+, a colleague, or the
+  // station being swapped for another on the coupling stick.
+  sim.sysval[O.MODE] = MODE.CONTROL;
+  sim.sysval[O.STATION_CODE] = 77;
+
+  const info = await station.readInfo();
+  assert.equal(info.modeName, 'Control', 'the change is visible');
+  assert.equal(info.code, 77);
+  assert.equal(station.modeName, 'Control', 'and the cached view moved with it');
+
+  await station.disconnect();
+});
+
+test('readInfo({cached:true}) is available for a caller that wants it', async () => {
+  const { sim, station } = readout();
+  await station.connect();
+  await station.readInfo();
+
+  sim.sysval[O.MODE] = MODE.CONTROL;
+  assert.equal((await station.readInfo({ cached: true })).modeName, 'Readout', 'stale on purpose');
+  assert.equal((await station.readInfo()).modeName, 'Control', 'fresh by default');
+
+  await station.disconnect();
+});
+
+test('setting the code preserves feedback the station actually has now', async () => {
+  const { sim, station } = readout();
+  await station.connect();
+  await station.readInfo();
+
+  // Beeper and lamp are turned off elsewhere after we last looked.
+  sim.sysval[O.FEEDBACK] = sim.sysval[O.FEEDBACK] & ~0b101;
+
+  await station.setStationCode(55);
+  const info = await station.readInfo();
+
+  assert.equal(info.code, 55);
+  assert.equal(info.audibleFeedback, false, 'the current setting survived, not a stale copy');
+  assert.equal(info.opticalFeedback, false);
+
   await station.disconnect();
 });

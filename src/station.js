@@ -478,8 +478,20 @@ export class SIStation extends EventTarget {
    * Everything worth knowing about the station, decoded from the system data.
    * Reads the block first if it has not been read yet.
    */
-  async readInfo() {
-    await this.#sysvalOrRefresh();
+  /**
+   * Read everything the station reports about itself.
+   *
+   * Re-reads the station by default. The previous behaviour was to reuse
+   * whatever was already in hand, which quietly served state from connect time
+   * long after the station had moved on -- a station reconfigured in Config+,
+   * or the other station after switching target, still read as the old one.
+   *
+   * @param {object} [options]
+   * @param {boolean} [options.cached] reuse the system data already in hand
+   */
+  async readInfo({ cached = false } = {}) {
+    if (cached) await this.#sysvalOrRefresh();
+    else await this.refreshSysval();
     const modelId = toInt(this.#field(O.MODEL_ID, 2));
     const si6Blocks = this.#field(O.SI6_CB, 1)[0];
     const activeMinutes = toInt(this.#field(O.ACTIVE_TIME, 2));
@@ -712,7 +724,7 @@ export class SIStation extends EventTarget {
   }
 
   async #writeProtoConfig(changes) {
-    await this.#sysvalOrRefresh();
+    await this.refreshSysval();
     const config = { ...this.protoConfig, ...changes };
     const byte =
       ((config.extendedProtocol ? 1 : 0) << 0) |
@@ -905,7 +917,10 @@ export class SIStation extends EventTarget {
     if (!Number.isInteger(code) || code < 1 || code > 1023) {
       throw new SIProtocolError(`Control code must be between 1 and 1023, got ${code}`);
     }
-    await this.#sysvalOrRefresh();
+    // The feedback byte is read, modified and written back, so it has to be
+    // the station's current one. Working from a stale copy would put back
+    // whatever the beeper and lamp were the last time anyone looked.
+    await this.refreshSysval();
     const low = code & 0xff;
     const highBits = (code >> 8) << 6;
     const feedback = preserveFeedback
@@ -920,7 +935,9 @@ export class SIStation extends EventTarget {
 
   /** Beeper and lamp on punch. */
   async setFeedback({ audible = true, optical = true } = {}) {
-    await this.#sysvalOrRefresh();
+    // Same read-modify-write as setStationCode: the top two bits of the
+    // control code live in this byte and must survive.
+    await this.refreshSysval();
     let feedback = this.#field(O.FEEDBACK, 1)[0];
     feedback = optical ? feedback | 0b1 : feedback & ~0b1;
     feedback = audible ? feedback | 0b100 : feedback & ~0b100;

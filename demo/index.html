@@ -233,6 +233,17 @@
   .row { display: flex; gap: 8px; }
   .row input { flex: 1; min-width: 0; }
 
+  select {
+    font: inherit;
+    padding: 9px 10px;
+    border: 2px solid var(--detail);
+    border-radius: 2px;
+    background: var(--paper);
+    color: var(--detail);
+    width: 100%;
+  }
+  select:disabled { opacity: 0.35; }
+
   input[type='number'] {
     font: inherit;
     font-family: var(--font-data);
@@ -299,41 +310,38 @@
       <section>
         <h2>Operating mode</h2>
         <p class="hint">
-          The mode the station is in right now is
-          <strong id="currentMode">unknown</strong>.
+          <strong id="currentMode">unknown</strong> &mdash; on
+          <span id="modeTarget">the cabled station</span>.
         </p>
-        <p class="hint">Contact punching &mdash; the card goes in the hole.</p>
-        <div class="stack modes">
-          <button class="mode" data-mode="readout" disabled>Readout</button>
-          <button class="mode" data-mode="control" disabled>Control</button>
-          <button class="mode" data-mode="start" disabled>Start</button>
-          <button class="mode" data-mode="finish" disabled>Finish</button>
-          <button class="mode" data-mode="check" disabled>Check</button>
-          <button class="mode" data-mode="clear" disabled>Clear</button>
-        </div>
-
-        <p class="hint" id="beaconHint">
-          Touch-free &mdash; Air+ / SIAC beacon. The station keeps taking
-          contact punches as well. Needs an Air+ capable station.
-        </p>
-        <div class="stack modes">
-          <button class="mode" data-mode="beacon-control" disabled>BC control</button>
-          <button class="mode" data-mode="beacon-start" disabled>BC start</button>
-          <button class="mode" data-mode="beacon-finish" disabled>BC finish</button>
-          <button class="mode" data-mode="beacon-readout" disabled>BC readout</button>
-        </div>
-
-        <p class="hint">
-          SIAC special &mdash; the station does only this and nothing else. The
-          mode byte is the same for all of them; the control code picks the
-          function, so the code field is not yours to set here.
-        </p>
-        <div class="stack modes">
-          <button class="siac" data-siac="on" disabled>SIAC ON</button>
-          <button class="siac" data-siac="off" disabled>SIAC OFF</button>
-          <button class="siac" data-siac="battery-test" disabled>Battery test</button>
-          <button class="siac" data-siac="radio-readout" disabled>Radio readout</button>
-          <button class="siac" data-siac="test" disabled>SIAC test</button>
+        <div class="stack">
+          <select id="modeSelect" disabled aria-label="Operating mode">
+            <optgroup label="Contact punching">
+              <option value="mode:readout">Readout</option>
+              <option value="mode:control">Control</option>
+              <option value="mode:start">Start</option>
+              <option value="mode:finish">Finish</option>
+              <option value="mode:check">Check</option>
+              <option value="mode:clear">Clear</option>
+            </optgroup>
+            <optgroup label="Touch-free (Air+ beacon)">
+              <option value="mode:beacon-control">BC control</option>
+              <option value="mode:beacon-start">BC start</option>
+              <option value="mode:beacon-finish">BC finish</option>
+              <option value="mode:beacon-readout">BC readout</option>
+            </optgroup>
+            <optgroup label="SIAC special (does nothing else)">
+              <option value="siac:on">SIAC ON</option>
+              <option value="siac:off">SIAC OFF</option>
+              <option value="siac:battery-test">SIAC battery test</option>
+              <option value="siac:radio-readout">SIAC radio readout</option>
+              <option value="siac:test">SIAC test</option>
+            </optgroup>
+          </select>
+          <p class="hint">
+            Beacon stations keep taking contact punches too. SIAC special
+            stations do not &mdash; they only perform that one function, and
+            their control code is set for them.
+          </p>
         </div>
       </section>
 
@@ -388,23 +396,6 @@
         </div>
       </section>
 
-      <section>
-        <h2>Any mode byte</h2>
-        <div class="stack">
-          <div class="row">
-            <input id="modeByte" type="text" value="0x01" disabled
-                   aria-label="Mode byte in hex" />
-            <button id="setModeByte" disabled>Write it</button>
-          </div>
-          <p class="hint">
-            For modes nobody has published. SPORTident documents four SIAC
-            special modes &mdash; SIAC&nbsp;ON, SIAC&nbsp;OFF, Radio&nbsp;Readout
-            and Battery&nbsp;Test &mdash; without giving their values. To find
-            one: set a station to it in Config+, read it here, and the mode byte
-            appears in the facts panel.
-          </p>
-        </div>
-      </section>
 
       <section>
         <h2>Control code</h2>
