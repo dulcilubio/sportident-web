@@ -166,6 +166,41 @@ export const MODE = {
   BC_READOUT_NEW: 0x35,
 };
 
+/**
+ * The SIAC special functions.
+ *
+ * These are not separate modes. The station sits in MODE.SIAC_SPECIAL (0x01)
+ * and the control code says which function it performs, which is why Config+
+ * will not let you edit the code in these modes -- it owns that field.
+ *
+ * Read off four BSF8s (firmware 656) configured with Config+. SPORTident
+ * document the four functions but publish none of these numbers.
+ *
+ * 126 sits unused between OFF and radio readout. Something may well live
+ * there; nothing here claims to know what.
+ */
+export const SIAC_FUNCTION = {
+  BATTERY_TEST: 123,
+  ON: 124,
+  OFF: 125,
+  RADIO_READOUT: 127,
+};
+
+export const SIAC_FUNCTION_NAMES = {
+  [SIAC_FUNCTION.BATTERY_TEST]: 'SIAC battery test',
+  [SIAC_FUNCTION.ON]: 'SIAC ON',
+  [SIAC_FUNCTION.OFF]: 'SIAC OFF',
+  [SIAC_FUNCTION.RADIO_READOUT]: 'SIAC radio readout',
+};
+
+/** Names accepted by setSiacFunction(). */
+export const SIAC_FUNCTION_BY_NAME = {
+  'battery-test': SIAC_FUNCTION.BATTERY_TEST,
+  on: SIAC_FUNCTION.ON,
+  off: SIAC_FUNCTION.OFF,
+  'radio-readout': SIAC_FUNCTION.RADIO_READOUT,
+};
+
 /** Older beacon mode byte -> the form newer stations want. */
 export const BEACON_OLD_TO_NEW = {
   [0x12]: 0x32,

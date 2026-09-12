@@ -244,6 +244,7 @@
   }
   input[type='number']:disabled { opacity: 0.35; }
   /* The mode the station is actually in, shown the way a punched control is. */
+  button.siac[aria-pressed='true'],
   button.mode[aria-pressed='true'] {
     background: var(--overprint);
     border-color: var(--overprint);
@@ -320,6 +321,18 @@
           <button class="mode" data-mode="beacon-start" disabled>BC start</button>
           <button class="mode" data-mode="beacon-finish" disabled>BC finish</button>
           <button class="mode" data-mode="beacon-readout" disabled>BC readout</button>
+        </div>
+
+        <p class="hint">
+          SIAC special &mdash; the station does only this and nothing else. The
+          mode byte is the same for all of them; the control code picks the
+          function, so the code field is not yours to set here.
+        </p>
+        <div class="stack modes">
+          <button class="siac" data-siac="on" disabled>SIAC ON</button>
+          <button class="siac" data-siac="off" disabled>SIAC OFF</button>
+          <button class="siac" data-siac="battery-test" disabled>Battery test</button>
+          <button class="siac" data-siac="radio-readout" disabled>Radio readout</button>
         </div>
       </section>
 

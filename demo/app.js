@@ -26,6 +26,8 @@ import {
   hex,
   MODE,
   MODE_BY_NAME,
+  SIAC_FUNCTION,
+  SIAC_FUNCTION_NAMES,
   requestStation,
   rowsToCsv,
   SimulatedTransport,
@@ -229,7 +231,7 @@ function setControlsEnabled(enabled) {
   ]) {
     $(id).disabled = !enabled;
   }
-  for (const button of document.querySelectorAll('button.mode')) {
+  for (const button of document.querySelectorAll('button.mode, button.siac')) {
     button.disabled = !enabled;
   }
   for (const radio of document.querySelectorAll('input[name="target"]')) {
@@ -270,6 +272,30 @@ function showMode() {
     const active = mode !== null && bytesFor(button.dataset.mode).includes(mode);
     button.setAttribute('aria-pressed', String(active));
   }
+
+  // A SIAC special station is told apart by its control code, not its mode.
+  const current = station?.siacFunction ?? null;
+  for (const button of document.querySelectorAll('button.siac')) {
+    const name = SIAC_FUNCTION_NAMES[SIAC_FUNCTION[keyFor(button.dataset.siac)]];
+    button.setAttribute('aria-pressed', String(current !== null && current === name));
+  }
+}
+
+const keyFor = (name) =>
+  ({ on: 'ON', off: 'OFF', 'battery-test': 'BATTERY_TEST', 'radio-readout': 'RADIO_READOUT' })[
+    name
+  ];
+
+for (const button of document.querySelectorAll('button.siac')) {
+  button.addEventListener('click', () =>
+    run(async () => {
+      const result = await station.setSiacFunction(button.dataset.siac);
+      await refreshFacts();
+      showMode();
+      showFeedback();
+      write('tx', `${result.name}: mode 0x01, control code ${result.code}`);
+    })
+  );
 }
 
 for (const button of document.querySelectorAll('button.mode')) {

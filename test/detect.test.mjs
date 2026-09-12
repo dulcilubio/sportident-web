@@ -163,7 +163,9 @@ test('setModeByte writes values setOperatingMode will not', async () => {
 
   const got = await station.setModeByte(0x01);
   assert.equal(got, 0x01, 'the raw write went through');
-  assert.equal(station.modeName, 'SIAC special');
+  // The SIAC family is named by its control code, so the name carries it
+  // rather than pretending the mode byte alone says which function it is.
+  assert.match(station.modeName, /^SIAC special \(code \d+\)$/);
 
   await station.disconnect();
 });

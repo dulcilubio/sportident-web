@@ -137,6 +137,17 @@ export type SIStationTarget = 'direct' | 'remote';
 
 export declare const MODE_BY_NAME: Record<SIModeName, number>;
 
+/** SIAC special functions, selected by control code within mode 0x01. */
+export type SIACFunctionName = 'on' | 'off' | 'battery-test' | 'radio-readout';
+export declare const SIAC_FUNCTION: {
+  BATTERY_TEST: number;
+  ON: number;
+  OFF: number;
+  RADIO_READOUT: number;
+};
+export declare const SIAC_FUNCTION_NAMES: Record<number, string>;
+export declare const SIAC_FUNCTION_BY_NAME: Record<SIACFunctionName, number>;
+
 export type SICardType = 'SI5' | 'SI6' | 'SI8' | 'SI9' | 'SI10' | 'pCard';
 
 // -------------------------------------------------------------------- options
@@ -396,6 +407,17 @@ export declare class SIStation extends EventTarget {
   setOperatingMode(mode: number | SIModeName): Promise<number>;
   /** Write the mode byte unchecked, for modes this library does not name. */
   setModeByte(byte: number): Promise<number>;
+  /**
+   * Put the station into a SIAC special function. These share one mode byte
+   * and are told apart by the control code, so both are written.
+   */
+  setSiacFunction(name: SIACFunctionName): Promise<{
+    mode: number;
+    code: number;
+    name: string;
+  }>;
+  /** Which SIAC special function this station performs, or null. */
+  readonly siacFunction: string | null;
   setStartMode(): Promise<void>;
   setCheckMode(): Promise<void>;
   setFinishMode(): Promise<void>;

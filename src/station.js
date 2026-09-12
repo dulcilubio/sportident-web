@@ -30,6 +30,8 @@ import {
   P_MS_INDIRECT,
   REMOTE_OFF,
   SUPPORTED_MODES,
+  SIAC_FUNCTION_BY_NAME,
+  SIAC_FUNCTION_NAMES,
   SUPPORTED_READ_BACKUP_MODES,
   WAKE_TIMEOUT,
   ACK,
@@ -433,6 +435,19 @@ export class SIStation extends EventTarget {
     return extractSysval(this.sysval, offset, length);
   }
 
+  /**
+   * Name a mode byte. The SIAC special family is one byte for four functions,
+   * told apart by the control code, so the code has to be read to name it.
+   */
+  #describeMode(mode) {
+    if (mode === MODE.SIAC_SPECIAL) {
+      const code = this.#field(O.STATION_CODE, 1)[0] | ((this.#field(O.FEEDBACK, 1)[0] >> 6) << 8);
+      const named = SIAC_FUNCTION_NAMES[code];
+      return named ?? `SIAC special (code ${code})`;
+    }
+    return MODE_NAMES[mode] ?? `0x${mode.toString(16).padStart(2, '0')}`;
+  }
+
   #updateProtoConfigFromSysval() {
     const proto = this.#field(O.PROTO, 1)[0];
     const mode = this.#field(O.MODE, 1)[0];
@@ -443,7 +458,7 @@ export class SIStation extends EventTarget {
       passwordAccess: (proto & (1 << 4)) !== 0,
       readCardAfterPunch: (proto & (1 << 7)) !== 0,
       mode,
-      modeName: MODE_NAMES[mode] ?? `0x${mode.toString(16).padStart(2, '0')}`,
+      modeName: this.#describeMode(mode),
     };
     this.serialNumber = toInt(this.#field(O.SERIAL_NO, 4));
     this.stationCode = this.#stationCodeFromSysval();
@@ -803,6 +818,46 @@ export class SIStation extends EventTarget {
       await this.refreshSysval();
     }
     return this.mode;
+  }
+
+  /**
+   * Put the station into one of the SIAC special functions.
+   *
+   * These are not four modes. The station goes into MODE.SIAC_SPECIAL and the
+   * control code picks the function, so both bytes have to be written -- set
+   * the mode alone and you get whichever function the old code happens to
+   * name. Config+ hides the code field in these modes for the same reason.
+   *
+   * @param {'on'|'off'|'battery-test'|'radio-readout'} name
+   * @returns {Promise<{mode: number, code: number, name: string}>}
+   */
+  async setSiacFunction(name) {
+    const code = SIAC_FUNCTION_BY_NAME[String(name).trim().toLowerCase()];
+    if (code === undefined) {
+      throw new SIProtocolError(
+        `Unknown SIAC function "${name}". Use one of: ` +
+          `${Object.keys(SIAC_FUNCTION_BY_NAME).join(', ')}.`
+      );
+    }
+
+    // Code first: while it is being written the station is still in its old
+    // mode, so a half-done change leaves something harmless rather than a
+    // SIAC station performing the wrong function.
+    await this.setStationCode(code);
+    await this.setModeByte(MODE.SIAC_SPECIAL);
+
+    return { mode: this.mode, code, name: SIAC_FUNCTION_NAMES[code] };
+  }
+
+  /**
+   * Which SIAC special function this station performs, or null when it is not
+   * in that mode at all.
+   */
+  get siacFunction() {
+    if (this.mode !== MODE.SIAC_SPECIAL) return null;
+    const code = this.protoConfig ? this.#field(O.STATION_CODE, 1)[0] : null;
+    if (code === null) return null;
+    return SIAC_FUNCTION_NAMES[code] ?? null;
   }
 
   /** The mode the station is in right now, as a number. */

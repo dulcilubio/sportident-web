@@ -269,6 +269,40 @@ punching, not swapped for it. Note that in Air+ mode a contactless punch does
 not restart the station's awake time -- only a direct punch does -- so set it
 long enough to cover the whole event.
 
+#### SIAC special functions
+
+SPORTident stations can be set to one of four SIAC functions, and a station in
+one of these does nothing else. They are **not** four modes: the station sits in
+`MODE.SIAC_SPECIAL` (`0x01`) and the **control code** picks the function, which
+is why Config+ will not let you edit the code in these modes -- it owns that
+field.
+
+```js
+await station.setSiacFunction('off');
+station.modeName;       // 'SIAC OFF'
+station.siacFunction;   // 'SIAC OFF'
+```
+
+| Function | Mode | Code |
+| --- | --- | --- |
+| SIAC battery test | `0x01` | 123 |
+| SIAC ON | `0x01` | 124 |
+| SIAC OFF | `0x01` | 125 |
+| SIAC radio readout | `0x01` | 127 |
+
+These numbers were read off four BSF8s (firmware 656) configured with Config+.
+SPORTident document the four functions but publish none of the values, and
+`sireader2.py` has only `0x01` with the comment "SIAC special (ON, OFF,
+Radio_ReadOut, etc.)".
+
+Note the gap at 126. Something may well live there; nothing here claims to know
+what, and a station found sitting on an unrecognised code is reported as
+`SIAC special (code 126)` rather than being given an invented meaning.
+
+Setting the mode byte on its own is not enough, and is worth avoiding: the
+station would land in the SIAC family with whatever code it already had, which
+is very likely the wrong function.
+
 #### Modes nobody has published
 
 SPORTident documents four SIAC special modes -- SIAC ON, SIAC OFF, Radio
