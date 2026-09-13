@@ -402,6 +402,26 @@ The cabled station has to be in extended protocol mode to relay at all;
 `setRemote()` throws if it is not. Switching target clears the cached system
 data, since it described the other station.
 
+### Subsecond times
+
+The start, finish, check and clear slots usually carry a station code beside
+the time, but not always: when bit 7 of the day byte is set that byte holds a
+subsecond count in 1/256 of a second instead, and the record has no code. The
+code then comes back as `null` and the `Date` carries the fraction.
+
+```js
+card.finishCode;               // null on a record that stores a subsecond
+card.finish.getMilliseconds(); // 578
+```
+
+Read off two cards: a SIAC finish with day byte `0x8d` and `0x94` beside it,
+which Config+ reports as an empty code at 20:47:46.578, and an SI-Card 8 finish
+with day byte `0x0c` and `0x0d` beside it, which is station code 13. Treating
+that byte as a code either way is what produced impossible codes such as 660.
+
+Punch records are not read this way: there the top bits of the day byte really
+are the top bits of the code, which is how codes above 255 are stored.
+
 ### SIAC battery dates
 
 A SIAC runs on a battery that cannot be replaced by the user and lasts a few

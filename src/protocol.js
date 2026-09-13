@@ -258,22 +258,57 @@ export function decodeCardData(data, cardType, reftime = null) {
     ),
   };
 
-  const startDay = at(card.STD);
-  result.start = decodeTime(pair(card.ST), startDay, reftime);
-  result.startCode = decodeStationCode(at(card.SN), startDay);
+  /**
+   * Decode one of the start/finish/check/clear slots.
+   *
+   * The byte beside the time is usually the station code, but not always: when
+   * bit 7 of the day byte is set it holds a subsecond count instead, in 1/256
+   * of a second, and the record carries no code at all.
+   *
+   * Read off two cards. A SIAC finish with day byte 0x8d and 0x94 beside it is
+   * shown by Config+ as an empty code at 20:47:46.578, and 148/256 is .578
+   * exactly. An SI-Card 8 finish with day byte 0x0c and 0x0d beside it is
+   * station code 13. Treating that byte as a code either way is what produced
+   * impossible codes such as 660 on SIAC finishes.
+   *
+   * Only these slots are read this way. In a punch record the top bits of the
+   * day byte really are the top bits of the code, which is how codes above 255
+   * are stored.
+   */
+  const slot = (dayOffset, codeOffset, timeOffset) => {
+    if (timeOffset === null || timeOffset === undefined) return { time: null, code: null };
 
-  const finishDay = at(card.FTD);
-  result.finish = decodeTime(pair(card.FT), finishDay, reftime);
-  result.finishCode = decodeStationCode(at(card.FN), finishDay);
+    const day = at(dayOffset);
+    const time = decodeTime(pair(timeOffset), day, reftime);
+    const beside = at(codeOffset);
 
-  const checkDay = at(card.CTD);
-  result.check = decodeTime(pair(card.CT), checkDay, reftime);
-  result.checkCode = decodeStationCode(at(card.CHN), checkDay);
+    if (day !== null && (day & 0b1000_0000) !== 0) {
+      // A subsecond, so there is no code here.
+      if (time !== null && beside !== null && beside !== 0xee) {
+        time.setMilliseconds(Math.round((beside / 256) * 1000));
+      }
+      return { time, code: null };
+    }
+
+    return { time, code: decodeStationCode(beside, day) };
+  };
+
+  const startSlot = slot(card.STD, card.SN, card.ST);
+  result.start = startSlot.time;
+  result.startCode = startSlot.code;
+
+  const finishSlot = slot(card.FTD, card.FN, card.FT);
+  result.finish = finishSlot.time;
+  result.finishCode = finishSlot.code;
+
+  const checkSlot = slot(card.CTD, card.CHN, card.CT);
+  result.check = checkSlot.time;
+  result.checkCode = checkSlot.code;
 
   if (card.LT !== null) {
-    const clearDay = at(card.LTD);
-    result.clear = decodeTime(pair(card.LT), clearDay, reftime);
-    result.clearCode = decodeStationCode(at(card.LN), clearDay);
+    const clearSlot = slot(card.LTD, card.LN, card.LT);
+    result.clear = clearSlot.time;
+    result.clearCode = clearSlot.code;
   } else {
     // SI-Card 5, 8, 9, 10 and 11 do not store the clear time.
     result.clear = null;

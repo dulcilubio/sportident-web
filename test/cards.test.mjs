@@ -68,3 +68,85 @@ test('card numbers map to the type that can read them', () => {
   assert.equal(cardTypeFromNumber(600000), 'SI6');
   assert.equal(cardTypeFromNumber(400000), 'SI5');
 });
+
+test('a slot with the subsecond flag has no code, and keeps the fraction', () => {
+  // Read off a SIAC: day byte 0x8d, 0x94 beside it, which Config+ reports as
+  // an empty code at 20:47:46.578. 148/256 is .578 exactly.
+  const layout = CARD.SI10;
+  const data = new Uint8Array(5 * 128).fill(0xee);
+  data[layout.CN2] = 0x82;
+  data[layout.CN1] = 0x73;
+  data[layout.CN0] = 0x1e;
+  data[layout.RC] = 0;
+
+  const seconds = 20 * 3600 + 47 * 60 + 46 - 43200; // pm half day
+  data[layout.FTD] = 0x8d; // bit 7 set: the next byte is a subsecond
+  data[layout.FN] = 0x94; // 148
+  data[layout.FT] = (seconds >> 8) & 0xff;
+  data[layout.FT + 1] = seconds & 0xff;
+
+  const card = decodeCardData(data, 'SI10', new Date(2026, 8, 13, 12, 0, 0));
+
+  assert.equal(card.finishCode, null, 'no station code in this record');
+  assert.equal(card.finish.getHours(), 20);
+  assert.equal(card.finish.getMinutes(), 47);
+  assert.equal(card.finish.getSeconds(), 46);
+  assert.equal(card.finish.getMilliseconds(), 578, '148/256 of a second');
+});
+
+test('a slot without the flag still has a station code', () => {
+  // Read off an SI-Card 8: day byte 0x0c, 0x0d beside it, station code 13.
+  const layout = CARD.SI8;
+  const data = new Uint8Array(2 * 128).fill(0xee);
+  data[layout.CN2] = 0x20;
+  data[layout.CN1] = 0x70;
+  data[layout.CN0] = 0x8e;
+  data[layout.RC] = 0;
+
+  const seconds = 11 * 3600 + 17 * 60 + 11;
+  data[layout.FTD] = 0x0c; // bit 7 clear
+  data[layout.FN] = 0x0d; // 13
+  data[layout.FT] = (seconds >> 8) & 0xff;
+  data[layout.FT + 1] = seconds & 0xff;
+
+  const card = decodeCardData(data, 'SI8', new Date(2026, 8, 13, 12, 0, 0));
+
+  assert.equal(card.finishCode, 13, 'a real control code');
+  assert.equal(card.finish.getMilliseconds(), 0, 'and no invented fraction');
+});
+
+test('the subsecond flag never invents a code of 660', () => {
+  // Reading 0x94 as a code and adding the day byte's top bits gave 148 + 512.
+  const layout = CARD.SI10;
+  const data = new Uint8Array(5 * 128).fill(0xee);
+  data[layout.CN2] = 0x82;
+  data[layout.CN1] = 0x73;
+  data[layout.CN0] = 0x1e;
+  data[layout.RC] = 0;
+  data[layout.FTD] = 0x8d;
+  data[layout.FN] = 0x94;
+  data[layout.FT] = 0x7b;
+  data[layout.FT + 1] = 0xb2;
+
+  const card = decodeCardData(data, 'SI10', new Date(2026, 8, 13, 12, 0, 0));
+  assert.notEqual(card.finishCode, 660);
+  assert.equal(card.finishCode, null);
+});
+
+test('punch records still carry codes above 255 in the day byte', () => {
+  // The subsecond rule applies only to the start/finish/check/clear slots. In
+  // a punch the top bits of the day byte really are the top bits of the code.
+  const layout = CARD.SI10;
+  const data = new Uint8Array(5 * 128).fill(0xee);
+  data[layout.RC] = 1;
+  const at = layout.P1;
+  data[at + layout.PTD] = 0b1000_1100; // top code bits 0b10, Saturday, am
+  data[at + layout.CN] = 100;
+  const seconds = 9 * 3600;
+  data[at + layout.PTH] = (seconds >> 8) & 0xff;
+  data[at + layout.PTL] = seconds & 0xff;
+
+  const card = decodeCardData(data, 'SI10', new Date(2026, 8, 13, 12, 0, 0));
+  assert.equal(card.punches.length, 1);
+  assert.equal(card.punches[0].code, 612, '100 + (0b10 << 8)');
+});
