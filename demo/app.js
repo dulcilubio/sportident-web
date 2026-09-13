@@ -696,6 +696,7 @@ function addCard(card) {
   meta.append(
     document.createTextNode(`${card.cardType} · `),
     strong(`${card.punches.length} punches`),
+    document.createTextNode(card.check ? ` · check ${clock(card.check)}` : ''),
     document.createTextNode(card.start ? ` · start ${clock(card.start)}` : ''),
     document.createTextNode(card.finish ? ` · finish ${clock(card.finish)}` : '')
   );
@@ -715,6 +716,30 @@ function addCard(card) {
   table.innerHTML =
     '<thead><tr><th>#</th><th>Control</th><th>Time</th><th>Split</th></tr></thead>';
   const body = document.createElement('tbody');
+
+  /**
+   * The stations a runner passes before the course itself.
+   *
+   * Clear and check are what prove the card was emptied and armed, so they
+   * matter when a run is queried, and a SIAC only switches its beacon on at
+   * check. Worth showing rather than leaving decoded but invisible.
+   */
+  for (const [label, time, code] of [
+    ['Clear', card.clear, card.clearCode],
+    ['Check', card.check, card.checkCode],
+    ['Start', card.start, card.startCode],
+  ]) {
+    if (!time) continue;
+    const row = document.createElement('tr');
+    row.className = 'pre-start';
+    row.append(
+      cell(''),
+      cell(code === null || code === undefined ? label : `${label} (${code})`),
+      cell(formatTimeOfDay(time)),
+      cell('')
+    );
+    body.append(row);
+  }
 
   let previous = card.start;
   card.punches.forEach((punch, index) => {
@@ -763,14 +788,13 @@ function addPunch(punch) {
     (punch.recovered ? ' · read back from memory' : '');
   header.append(number, meta);
 
-  // A SIAC carries no battery date of its own, so it has to be looked up.
-  // Never let that hold up showing the card, and never let it fail loudly.
-  if (isSiacNumber(card.cardNumber) && $('checkBattery').checked) {
+  // A live punch carries a card number too, so the same battery note applies.
+  if (isSiacNumber(punch.cardNumber) && $('checkBattery').checked) {
     const note = document.createElement('span');
     note.className = 'meta battery';
     note.textContent = ' · checking battery…';
     header.append(note);
-    showBattery(card.cardNumber, note);
+    showBattery(punch.cardNumber, note);
   }
   line.append(header);
   prepend(line);
@@ -788,15 +812,8 @@ function showBackup(punches, info) {
   meta.append(strong(`${punches.length} punches`), document.createTextNode(' from the backup memory'));
   header.append(number, meta);
 
-  // A SIAC carries no battery date of its own, so it has to be looked up.
-  // Never let that hold up showing the card, and never let it fail loudly.
-  if (isSiacNumber(card.cardNumber) && $('checkBattery').checked) {
-    const note = document.createElement('span');
-    note.className = 'meta battery';
-    note.textContent = ' · checking battery…';
-    header.append(note);
-    showBattery(card.cardNumber, note);
-  }
+  // No battery note here: a backup listing is about the station and the many
+  // cards that passed it, not about one card.
 
   const table = document.createElement('table');
   table.innerHTML = '<thead><tr><th>#</th><th>Card</th><th>Punched</th><th></th></tr></thead>';

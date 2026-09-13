@@ -214,6 +214,9 @@
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   tbody tr:last-child td { border-bottom: 0; }
   tr.split-line td { border-top: 1px solid var(--line); }
+  /* The clear/check/start rows are about the card, not the course. */
+  tr.pre-start td { color: var(--ink-soft); background: #fafcfd; }
+  tr.pre-start + tr:not(.pre-start) td { border-top: 1px solid var(--line); }
 
   .empty {
     border: 1px dashed var(--line); border-radius: 4px;
@@ -601,7 +604,7 @@
 </script>
 
 <!-- the query is a cache buster: bump it when app.js changes shape -->
-<script type="module" src="./app.js?v=3"></script>
+<script type="module" src="./app.js?v=4"></script>
 <script>
   // A module that throws leaves the page looking fine and doing nothing. Say so.
   window.addEventListener('error', function (event) {
