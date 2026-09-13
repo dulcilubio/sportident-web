@@ -50,8 +50,28 @@ function showTab(name) {
   }
 }
 
-for (const tab of document.querySelectorAll('.rail button[data-tab]')) {
-  tab.addEventListener('click', () => showTab(tab.dataset.tab));
+// Delegated from the rail rather than bound per button: one listener, and it
+// keeps working whatever happens to the buttons afterwards.
+document.querySelector('.rail')?.addEventListener('click', (event) => {
+  const tab = event.target.closest('button[data-tab]');
+  if (tab) showTab(tab.dataset.tab);
+});
+
+/**
+ * Wire a handler by element id.
+ *
+ * Binding straight onto $('someId') means one renamed element throws during
+ * module evaluation and takes every later handler with it -- the page then
+ * looks fine and does nothing at all. This reports the mismatch and carries
+ * on wiring the rest.
+ */
+function on(id, event, handler) {
+  const element = $(id);
+  if (!element) {
+    console.error(`demo: no element #${id} to attach ${event} to`);
+    return;
+  }
+  element.addEventListener(event, handler);
 }
 const ui = {
   connect: $('connect'),
@@ -105,20 +125,20 @@ async function connectWith(prefer) {
   }
 }
 
-ui.connect.addEventListener('click', () => connectWith('auto'));
+on('connect', 'click', () => connectWith('auto'));
 
 // Worth its own button because on macOS the serial picker is often empty --
 // Apple's driver ignores SPORTident's product id -- while WebUSB still works.
-ui.connectUsb.addEventListener('click', () => connectWith('usb'));
+on('connectUsb', 'click', () => connectWith('usb'));
 
-ui.simulate.addEventListener('click', async () => {
+on('simulate', 'click', async () => {
   simulator = new SimulatedTransport({ code: 31, mode: MODE.READOUT });
   await attach(new SIReadout(simulator));
   setStatus('live', 'Simulated station, no hardware attached');
   scheduleSimulatedCards();
 });
 
-ui.disconnect.addEventListener('click', async () => {
+on('disconnect', 'click', async () => {
   await station?.disconnect().catch(() => {});
   station = null;
   simulator = null;
@@ -312,7 +332,7 @@ function showMode() {
   if (select.value !== value) select.selectedIndex = -1;
 }
 
-$('modeSelect').addEventListener('change', (event) =>
+on('modeSelect', 'change', (event) =>
   run(async () => {
     const [kind, key] = event.target.value.split(':');
 
@@ -399,7 +419,7 @@ function clearWaking() {
   ui.progress.firstElementChild.style.width = '0';
 }
 
-$('readRemote').addEventListener('click', () =>
+on('readRemote', 'click', () =>
   run(async () => {
     station.addEventListener('waking', trackWaking);
     try {
@@ -433,7 +453,7 @@ function wakeAbort() {
   return wakeController.signal;
 }
 
-$('cancelWake').addEventListener('click', () => {
+on('cancelWake', 'click', () => {
   wakeController?.abort();
   $('cancelWake').hidden = true;
   write('err', 'wake cancelled');
@@ -467,7 +487,7 @@ function showRemoteFacts(info) {
 
 // ------------------------------------------------------ code, feedback, awake
 
-$('setCode').addEventListener('click', () =>
+on('setCode', 'click', () =>
   run(async () => {
     const code = Number($('codeInput').value);
     await station.setStationCode(code);
@@ -502,10 +522,10 @@ async function applyFeedback() {
   );
 }
 
-$('fbBeeper').addEventListener('change', () => run(applyFeedback));
-$('fbLamp').addEventListener('change', () => run(applyFeedback));
+on('fbBeeper', 'change', () => run(applyFeedback));
+on('fbLamp', 'change', () => run(applyFeedback));
 
-$('setActive').addEventListener('click', () =>
+on('setActive', 'click', () =>
   run(async () => {
     const minutes = Number($('activeInput').value);
     await station.setActiveTime(minutes);
@@ -514,7 +534,7 @@ $('setActive').addEventListener('click', () =>
   })
 );
 
-$('toggleProtocol').addEventListener('click', () =>
+on('toggleProtocol', 'click', () =>
   run(async () => {
     const toExtended = !lastInfo?.extendedProtocol;
     await station.setExtendedProtocol(toExtended);
@@ -523,7 +543,7 @@ $('toggleProtocol').addEventListener('click', () =>
   })
 );
 
-$('powerOffRemote').addEventListener('click', () =>
+on('powerOffRemote', 'click', () =>
   run(async () => {
     await station.powerOffRemote();
     write('tx', 'sent the switch-off sequence to the remote station');
@@ -556,7 +576,7 @@ for (const radio of document.querySelectorAll('input[name="punchMode"]')) {
   );
 }
 
-$('detectCard').addEventListener('click', () =>
+on('detectCard', 'click', () =>
   run(async () => {
     const found = await station.detectCard();
     if (found) {
@@ -600,9 +620,9 @@ async function showBattery(cardNumber, note) {
 
 // ------------------------------------------------------------------- commands
 
-$('beep').addEventListener('click', () => run(() => station.beep(2)));
+on('beep', 'click', () => run(() => station.beep(2)));
 
-$('syncClock').addEventListener('click', () =>
+on('syncClock', 'click', () =>
   run(async () => {
     await station.setTime(new Date());
     await refreshFacts();
@@ -610,14 +630,14 @@ $('syncClock').addEventListener('click', () =>
   })
 );
 
-$('powerOff').addEventListener('click', () =>
+on('powerOff', 'click', () =>
   run(async () => {
     await station.powerOff();
     setStatus('warn', 'The station was switched off');
   })
 );
 
-$('eraseBackup').addEventListener('click', () =>
+on('eraseBackup', 'click', () =>
   run(async () => {
     if (!confirm('Erase the backup memory? The punches on the station are gone for good.')) return;
     await station.eraseBackup();
@@ -626,7 +646,7 @@ $('eraseBackup').addEventListener('click', () =>
   })
 );
 
-$('readBackup').addEventListener('click', () =>
+on('readBackup', 'click', () =>
   run(async () => {
     const bar = ui.progress.firstElementChild;
     ui.progress.hidden = false;
@@ -654,7 +674,7 @@ $('readBackup').addEventListener('click', () =>
   })
 );
 
-$('saveSysval').addEventListener('click', () =>
+on('saveSysval', 'click', () =>
   run(async () => {
     await station.refreshSysval();
     downloadText(`${station.stationCode}_configuration.csv`, sysvalToCsv(station.sysval));
@@ -807,7 +827,7 @@ function showBackup(punches, info) {
   prepend(article);
 }
 
-$('exportCards').addEventListener('click', () => {
+on('exportCards', 'click', () => {
   const rows = [];
   for (const card of readCards) {
     for (const [index, punch] of card.punches.entries()) {
@@ -831,7 +851,7 @@ $('exportCards').addEventListener('click', () => {
   );
 });
 
-$('clearCards').addEventListener('click', () => {
+on('clearCards', 'click', () => {
   readCards = [];
   ui.cards.replaceChildren(emptyState());
   ui.resultsHeading.textContent = 'Cards read';
