@@ -572,7 +572,45 @@
   <div class="progress" id="progress" hidden><i></i></div>
 </div>
 
+<!-- Section switching is plain UI and deliberately does not live in app.js:
+     a module that fails to load must not also cost you the navigation. This
+     runs standalone, before any import is attempted. -->
+<script>
+  (function () {
+    var rail = document.querySelector('.rail');
+    if (!rail) return;
+
+    function show(name) {
+      var tabs = rail.querySelectorAll('button[data-tab]');
+      for (var i = 0; i < tabs.length; i++) {
+        var active = tabs[i].getAttribute('data-tab') === name;
+        tabs[i].setAttribute('aria-selected', active ? 'true' : 'false');
+        var panel = document.getElementById('panel-' + tabs[i].getAttribute('data-tab'));
+        if (panel) panel.hidden = !active;
+      }
+    }
+
+    rail.addEventListener('click', function (event) {
+      var tab = event.target.closest ? event.target.closest('button[data-tab]') : null;
+      if (tab) show(tab.getAttribute('data-tab'));
+    });
+
+    // app.js switches panels too, for instance when a card is read.
+    window.showTab = show;
+  })();
+</script>
+
 <!-- the query is a cache buster: bump it when app.js changes shape -->
-<script type="module" src="./app.js?v=2"></script>
+<script type="module" src="./app.js?v=3"></script>
+<script>
+  // A module that throws leaves the page looking fine and doing nothing. Say so.
+  window.addEventListener('error', function (event) {
+    var notice = document.getElementById('support');
+    if (!notice) return;
+    notice.hidden = false;
+    notice.textContent = 'The page script failed to load: ' + (event.message || event.type) +
+      '. Station controls will not work; the browser console has the detail.';
+  });
+</script>
 </body>
 </html>

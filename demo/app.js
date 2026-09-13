@@ -40,22 +40,11 @@ const $ = (id) => document.getElementById(id);
 
 // ------------------------------------------------------------------ sections
 
-/** One panel at a time, the way a settings tool works. */
-function showTab(name) {
-  for (const tab of document.querySelectorAll('.rail button[data-tab]')) {
-    const active = tab.dataset.tab === name;
-    tab.setAttribute('aria-selected', String(active));
-    const panel = $(`panel-${tab.dataset.tab}`);
-    if (panel) panel.hidden = !active;
-  }
-}
-
-// Delegated from the rail rather than bound per button: one listener, and it
-// keeps working whatever happens to the buttons afterwards.
-document.querySelector('.rail')?.addEventListener('click', (event) => {
-  const tab = event.target.closest('button[data-tab]');
-  if (tab) showTab(tab.dataset.tab);
-});
+/**
+ * Bring a section forward. The switching itself lives in a plain script in the
+ * page, so navigation still works if this module fails to load.
+ */
+const showTab = (name) => window.showTab?.(name);
 
 /**
  * Wire a handler by element id.
