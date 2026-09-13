@@ -107,22 +107,55 @@ One thing to know about WebUSB: claiming a device is exclusive. While a tab has
 the station open, nothing else on the machine can talk to it, and the tab has
 to disconnect before another program can.
 
-## Try it without a station
+## The configuration tool
 
-`demo/` is a working readout tool: station status, card readouts with splits,
-backup memory export, and a byte-level trace of the serial line. Serve the
-repository root and open `/demo/`:
+`config/` is a working tool, not a toy: station identity and settings, every
+operating mode including the Air+ beacon and SIAC special ones, control code,
+punch feedback, awake time, card readouts with splits, backup memory export,
+relaying to a station on the coupling stick, and a byte-level trace of the
+serial line. Serve the repository root and open `/config/`:
 
 ```
-python3 -m http.server 8080
+npm run serve        # python3 -m http.server 8080
 ```
 
-The "Try it without hardware" button swaps the serial port for
-`SimulatedTransport`, a fake BSM8 that answers the same frames, hands out card
-dumps and can send autosend punches. It is also what the test suite runs
-against, so it stays honest.
+It keeps working when the network does not. Nothing about talking to a station
+needs the internet, so the page loads no fonts or scripts from anywhere else
+and a service worker caches everything it is built from: once opened, it opens
+again with no connection at all. The one networked feature, the SIAC battery
+lookup, is skipped and says so.
+
+A reload does not cost you the station either. The open device is thrown away
+with the page, but the browser keeps the permission, so the tool reopens a
+single granted station by itself.
+
+The "Simulator" button swaps the serial port for `SimulatedTransport`, a fake
+BSM8 that answers the same frames, hands out card dumps and can send autosend
+punches. It is also what the test suite runs against, so it stays honest.
 
 ## API
+
+Everything is exported from the package root. `src/index.d.ts` types all 109
+exports, so an editor will complete them.
+
+| | |
+| --- | --- |
+| **Connect** | `requestStation` · `getGrantedStations` · `transportSupport` · `toTransport` |
+| **Transports** | `WebSerialTransport` · `WebUsbTransport` · `SimulatedTransport` |
+| **Stations** | `SIStation` · `SIReadout` · `SIControl` |
+| **Identity** | `readInfo` · `refreshSysval` · `getTime` · `setTime` · `getClockOffset` |
+| **Modes** | `setOperatingMode` · `setSiacFunction` · `setModeByte` · `mode` · `modeName` · `siacFunction` |
+| **Settings** | `setStationCode` · `setFeedback` · `setActiveTime` · `setExtendedProtocol` · `setAutoSend` |
+| **Remote** | `setTarget` · `withRemote` · `wake` · `powerOffRemote` |
+| **Cards** | `detectCard` · `readCard` · `readCardRaw` · `readCardImage` · `ackCard` · `waitForCard` |
+| **Card decoding** | `decodeCardData` · `decodeCardHolder` · `decodeCardHardware` · `decodeCardText` |
+| **Backup** | `readBackup` · `eraseBackup` · `backupToCsv` · `sysvalToCsv` |
+| **SIAC battery** | `fetchSiacBattery` · `isSiacNumber` · `describeBattery` |
+| **Errors** | `SIError` · `SITimeoutError` · `SIProtocolError` · `SINakError` · `SIConnectionError` · `SICardChangedError` · `SIBatteryLookupError` |
+
+Events on a station: `card` · `cardInserted` · `cardRemoved` · `cardError` ·
+`punch` · `waking` · `wake` · `open` · `close` · `error` · `nak` · `frame` ·
+`unexpectedFrame` · `tx` · `rx`.
 
 ### Connecting
 
@@ -329,7 +362,7 @@ station.modeName;              // 'SIAC special'
 ```
 
 The way to find a value is to set a station to the mode in Config+ and read the
-byte back -- `readInfo().mode`, or the mode byte shown in the demo's facts
+byte back -- `readInfo().mode`, or the mode byte shown in the tool's facts
 panel. That is how the two beacon encodings were pinned down.
 
 ### Direct and remote
@@ -591,6 +624,43 @@ arbitrary chunk boundaries, resynchronisation after noise and bad checksums,
 card number and time decoding, the CSV layout, and three end-to-end runs
 against the simulator: a card readout, a backup memory dump and autosend
 punches with a recovered gap.
+
+## What is not settled
+
+Much of what this library knows about cards and stations was worked out by
+reading real hardware and matching it against Config+, because SPORTident do
+not publish it. That leaves things that are verified, and things that are not.
+The difference matters, so it is written down rather than left to be
+discovered at an event.
+
+Verified against hardware here: the SI-Card 8 and SIAC layouts, all five SIAC
+special functions, both beacon encodings, the holder text area, card hardware
+and battery dates, the subsecond rule, control codes including above 255,
+punch feedback, and reading a station over WebUSB with no driver.
+
+Not verified, and worth treating with care:
+
+- **SI-Card 5, 6 and 9 layouts** have never been read here. SI-Card 9 is
+  documented by SPORTident as 12 hour format where 8, 10, 11 and SIAC use 24
+  hour with a weekday, but the table in `constants.js` gives it a day byte like
+  the others. If you have one, read it and check.
+- **The subsecond rule** comes from two cards: a SIAC finish with the flag set
+  and an SI-Card 8 finish without it. It has not been seen on start, check or
+  clear records.
+- **A SIAC test station** carries `PROGRAM` 0x30 where the other four SIAC
+  functions carry 0x38. That bit is undocumented and nothing here writes it, so
+  a station configured through this library may differ from a Config+ one in
+  that byte. Check against a real SIAC before relying on it.
+- **Mode 0x01 with control code 126** is a gap between SIAC OFF and radio
+  readout. Nothing seen here sits there.
+- **Card battery voltage, clear count, character set and feedback signal** are
+  in the card image, and Config+ reports them, but their offsets have not been
+  found.
+- **The clear time on SI-Card 8 and later** is reported by Config+ but this
+  library returns null, since the layout table has no offset for it.
+- **`config/app.js` has no tests.** The library is covered thoroughly; the tool
+  built on it is not, and two functions once shipped a `ReferenceError` because
+  of that.
 
 ## Known limits
 

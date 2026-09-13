@@ -10,15 +10,18 @@
       "default": "./src/index.js"
     },
     "./simulator": "./src/simulator.js",
-    "./protocol": "./src/protocol.js"
+    "./protocol": "./src/protocol.js",
+    "./holder": "./src/holder.js",
+    "./battery": "./src/battery.js"
   },
   "files": [
     "src",
-    "README.md"
+    "README.md",
+    "NOTICE"
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "demo": "python3 -m http.server 8080"
+    "serve": "python3 -m http.server 8080"
   },
   "keywords": [
     "sportident",

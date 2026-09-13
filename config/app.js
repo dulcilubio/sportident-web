@@ -5,13 +5,13 @@
 // See NOTICE and LICENSE at the repository root.
 
 /**
- * Demo for the sportident-web library.
+ * Configuration tool for SPORTident stations and cards.
  *
- * Serve this folder over http (Web Serial needs a secure context and module
- * imports do not work from file://):
+ * Serve this folder over http (Web Serial and WebUSB need a secure context,
+ * and module imports do not work from file://):
  *
  *   python3 -m http.server 8080
- *   open http://localhost:8080/demo/
+ *   open http://localhost:8080/config/
  */
 
 import {
@@ -58,7 +58,7 @@ const showTab = (name) => window.showTab?.(name);
 function on(id, event, handler) {
   const element = $(id);
   if (!element) {
-    console.error(`demo: no element #${id} to attach ${event} to`);
+    console.error(`config: no element #${id} to attach ${event} to`);
     return;
   }
   element.addEventListener(event, handler);

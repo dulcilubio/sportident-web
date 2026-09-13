@@ -698,3 +698,28 @@ export declare const WAKEUP: number;
 export declare const REC_LEN: number;
 export declare const TIME_RESET: number;
 export declare const REMOTE_OFF: Uint8Array;
+export declare const DLE: number;
+
+/** How long wake() spends rousing a sleeping station, in ms. */
+export declare const WAKE_TIMEOUT: number;
+
+/** Command parameters. */
+export declare const P_MS_DIRECT: number;
+export declare const P_MS_INDIRECT: number;
+export declare const P_SI6_CB: number;
+
+/** CRC parameters, exposed for anyone reimplementing the checksum. */
+export declare const CRC_POLYNOM: number;
+export declare const CRC_BITF: number;
+
+/** Backup memory record layout, legacy protocol. */
+export declare const BUL: number;
+export declare const BUX: number;
+export declare const BC_CN: number;
+export declare const BC_TIME: number;
+export declare const T_CN: number;
+export declare const T_OFFSET: number;
+export declare const T_TIME: number;
+
+/** Card text above 0x7f, code page 437. */
+export declare const CARD_TEXT: Record<number, string>;

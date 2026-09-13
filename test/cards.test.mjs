@@ -157,7 +157,7 @@ test('the offline cache lists every module the page loads', async () => {
   // find out.
   const { readdirSync, readFileSync } = await import('node:fs');
 
-  const shell = readFileSync(new URL('../demo/sw.js', import.meta.url), 'utf8');
+  const shell = readFileSync(new URL('../config/sw.js', import.meta.url), 'utf8');
   const cached = new Set(
     [...shell.matchAll(/'\.\.\/src\/([\w.-]+\.js)'/g)].map((m) => m[1])
   );
