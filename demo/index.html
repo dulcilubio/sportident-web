@@ -4,9 +4,10 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>SPORTident station tool</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<!-- No web fonts. This has to work in a field with no signal, and a
+     stylesheet from another origin is a render-blocking request that fails
+     slowly rather than quickly when there is nothing to answer it. The stacks
+     below are what the machine already has. -->
 <style>
   /* An instrument panel, not a web page: dark chrome around a bright work
      surface, one accent, and semantic colour used sparingly so that a warning
@@ -26,8 +27,8 @@
     --live: #1f8a4c;
     --warn: #b4690e;
     --bad: #c0304a;
-    --font-ui: 'Archivo', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-    --font-data: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+    --font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --font-data: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
   }
 
   * { box-sizing: border-box; }
@@ -330,6 +331,10 @@
 
   <div class="work">
     <p class="notice" id="support" hidden></p>
+    <p class="notice" id="offlineNote" hidden>
+      No network. Stations and cards work exactly as usual &mdash; only the SIAC
+      battery lookup needs the internet, and it will be skipped.
+    </p>
 
     <!-- ------------------------------------------------------------ overview -->
     <div class="panel" id="panel-overview">
@@ -604,7 +609,28 @@
 </script>
 
 <!-- the query is a cache buster: bump it when app.js changes shape -->
-<script type="module" src="./app.js?v=4"></script>
+<script type="module" src="./app.js?v=5"></script>
+<script>
+  // Keep working when the network does not. Registration is best effort: the
+  // page is perfectly usable without it, and a station needs no internet.
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('./sw.js').catch(function (err) {
+        console.warn('offline support unavailable:', err.message);
+      });
+    });
+  }
+
+  // Say plainly when the only networked feature cannot work.
+  function showOnlineState() {
+    var note = document.getElementById('offlineNote');
+    if (note) note.hidden = navigator.onLine;
+  }
+  window.addEventListener('online', showOnlineState);
+  window.addEventListener('offline', showOnlineState);
+  window.addEventListener('load', showOnlineState);
+</script>
+
 <script>
   // A module that throws leaves the page looking fine and doing nothing. Say so.
   window.addEventListener('error', function (event) {

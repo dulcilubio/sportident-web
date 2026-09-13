@@ -27,6 +27,7 @@ import {
   MODE,
   MODE_BY_NAME,
   SIAC_FUNCTIONS,
+  getGrantedStations,
   requestStation,
   rowsToCsv,
   SimulatedTransport,
@@ -104,6 +105,39 @@ if (!support.any) {
 }
 
 /** @param {'auto'|'serial'|'usb'} prefer */
+/**
+ * Reopen a station the browser already has permission for.
+ *
+ * A reload throws away the page and every object in it, the open device
+ * included, so the link goes with it. The *permission* survives: both Web
+ * Serial and WebUSB will hand back a granted device without asking again, and
+ * opening it needs no click. So a reload can pick the station straight back
+ * up, which matters when the alternative is an official clicking through a
+ * picker in the middle of an event.
+ *
+ * Only reconnects when exactly one station was granted. With several there is
+ * no way to tell which was in use, and silently opening the wrong one is worse
+ * than asking.
+ */
+async function reconnectSilently() {
+  let granted;
+  try {
+    granted = await getGrantedStations();
+  } catch {
+    return; // no permission API, or the browser refused. Not worth reporting.
+  }
+  if (granted.length !== 1) return;
+
+  try {
+    setStatus('warn', 'Reopening the station this page already has access to…');
+    await attach(new SIReadout(toTransport(granted[0])));
+  } catch {
+    // The station may be unplugged, or held by another tab. Leave the page
+    // ready to connect by hand rather than showing an error nobody asked for.
+    setStatus('', 'Nothing connected');
+  }
+}
+
 async function connectWith(prefer) {
   try {
     const source = await requestStation({ prefer });
@@ -577,6 +611,9 @@ on('detectCard', 'click', () =>
     }
   })
 );
+
+// Pick the station back up after a reload, before anyone has to click.
+reconnectSilently();
 
 // ------------------------------------------------------------- siac battery
 

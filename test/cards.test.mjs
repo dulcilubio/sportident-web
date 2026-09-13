@@ -150,3 +150,22 @@ test('punch records still carry codes above 255 in the day byte', () => {
   assert.equal(card.punches.length, 1);
   assert.equal(card.punches[0].code, 612, '100 + (0b10 << 8)');
 });
+
+test('the offline cache lists every module the page loads', async () => {
+  // A file added to src/ but not to the service worker shell would work in
+  // development and fail in a forest, which is the worst possible place to
+  // find out.
+  const { readdirSync, readFileSync } = await import('node:fs');
+
+  const shell = readFileSync(new URL('../demo/sw.js', import.meta.url), 'utf8');
+  const cached = new Set(
+    [...shell.matchAll(/'\.\.\/src\/([\w.-]+\.js)'/g)].map((m) => m[1])
+  );
+  const onDisk = readdirSync(new URL('../src/', import.meta.url)).filter((f) => f.endsWith('.js'));
+
+  const missing = onDisk.filter((f) => !cached.has(f));
+  assert.deepEqual(missing, [], `these are not in the service worker shell: ${missing}`);
+
+  const stale = [...cached].filter((f) => !onDisk.includes(f));
+  assert.deepEqual(stale, [], `these are cached but no longer exist: ${stale}`);
+});
