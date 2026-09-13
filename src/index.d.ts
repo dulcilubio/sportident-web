@@ -240,6 +240,47 @@ export declare class WebSerialTransport implements SITransport {
   setBaudRate(baudRate: number): Promise<void>;
 }
 
+// ------------------------------------------------------------- card holder
+
+/** Who a card belongs to. Every field is a string, empty when not stored. */
+export interface SICardHolder {
+  firstName: string;
+  lastName: string;
+  sex: string;
+  dateOfBirth: string;
+  club: string;
+  email: string;
+  phone: string;
+  city: string;
+  street: string;
+  postcode: string;
+  country: string;
+  /** The whole text area, before splitting. */
+  raw: string;
+}
+
+export interface SICardHardware {
+  hardwareVersion: string | null;
+  softwareVersion: string | null;
+  /** "YYYY-MM-DD", or null when the card does not carry one. */
+  batteryDate: string | null;
+  /** What the card calls itself, such as "siac". Empty when absent. */
+  typeTag: string;
+}
+
+export declare const HOLDER_FIELDS: readonly (keyof SICardHolder)[];
+export declare const HOLDER_AREA: { start: number; end: number };
+export declare const CARD_INFO: {
+  BATTERY_DATE: number;
+  HARDWARE: number;
+  SOFTWARE: number;
+  TYPE_TAG: number;
+};
+/** Both take a block addressed image, as returned by readCardImage(). */
+export declare function decodeCardHolder(image: Uint8Array): SICardHolder;
+export declare function decodeCardHardware(image: Uint8Array): SICardHardware;
+export declare function decodeCardText(bytes: Uint8Array): string;
+
 // ------------------------------------------------------------ siac battery
 
 export interface SIBattery {
@@ -479,6 +520,8 @@ export declare class SIReadout extends SIStation {
   } | null>;
   readCard(reftime?: Date | null): Promise<SICardData>;
   readCardRaw(): Promise<Uint8Array>;
+  /** Every block, at its real address, so fixed-offset fields can be decoded. */
+  readCardImage(options?: { blocks?: number[] }): Promise<Uint8Array>;
   ackCard(): Promise<void>;
   waitForCard(options?: {
     timeout?: number;

@@ -56,6 +56,14 @@ export {
   WebUsbTransport,
 } from './webusb.js';
 export {
+  CARD_INFO,
+  decodeCardHardware,
+  decodeCardHolder,
+  decodeCardText,
+  HOLDER_AREA,
+  HOLDER_FIELDS,
+} from './holder.js';
+export {
   describeBattery,
   fetchSiacBattery,
   isSiacNumber,

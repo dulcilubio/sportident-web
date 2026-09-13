@@ -300,6 +300,46 @@ export class SIReadout extends SIStation {
     }
   }
 
+  /**
+   * Read the card into a block addressed image: block n at offset n * 128.
+   *
+   * readCardRaw() returns only the blocks the punches need, concatenated, so
+   * the holder's details -- which start at 0x20 and run into block 1 -- are
+   * not in it at all. This reads every block the card has, so anything at a
+   * fixed address can be decoded from the result.
+   *
+   * Slower than readCardRaw(), one command per block, so it is a separate
+   * call rather than something every readout pays for.
+   *
+   * @param {object} [options]
+   * @param {number[]} [options.blocks] which blocks to fetch, default all
+   * @returns {Promise<Uint8Array>} 128 bytes per block, unread blocks left 0xEE
+   */
+  async readCardImage({ blocks } = {}) {
+    this.assertReadoutMode();
+    if (!this.cardType) throw new SIProtocolError('There is no card in the station');
+
+    const layout = CARD[this.cardType];
+    const count = layout.BC ?? 1;
+    const wanted = blocks ?? Array.from({ length: count }, (_, i) => i);
+
+    if (this.cardType === 'SI5' || this.cardType === 'SI6') {
+      throw new SIProtocolError(
+        `${this.cardType} is not read block by block; use readCardRaw() for it.`
+      );
+    }
+
+    const image = new Uint8Array(Math.max(...wanted, count - 1) * 128 + 128).fill(0xee);
+    for (const block of wanted) {
+      const data = await this.sendCommand(CMD.GET_SI9, [block], { timeout: 5000 });
+      // The reply repeats the block number it answered for; trust that over
+      // the one asked for, since a station may answer a different block.
+      const at = (data[0] ?? block) * 128;
+      if (at + 128 <= image.length) image.set(data.subarray(1, 129), at);
+    }
+    return image;
+  }
+
   /** Make the station beep and blink to show the card was read. */
   async ackCard() {
     await this.writeAck();
