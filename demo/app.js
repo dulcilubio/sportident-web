@@ -37,6 +37,22 @@ import {
 } from '../src/index.js';
 
 const $ = (id) => document.getElementById(id);
+
+// ------------------------------------------------------------------ sections
+
+/** One panel at a time, the way a settings tool works. */
+function showTab(name) {
+  for (const tab of document.querySelectorAll('.rail button[data-tab]')) {
+    const active = tab.dataset.tab === name;
+    tab.setAttribute('aria-selected', String(active));
+    const panel = $(`panel-${tab.dataset.tab}`);
+    if (panel) panel.hidden = !active;
+  }
+}
+
+for (const tab of document.querySelectorAll('.rail button[data-tab]')) {
+  tab.addEventListener('click', () => showTab(tab.dataset.tab));
+}
 const ui = {
   connect: $('connect'),
   connectUsb: $('connectUsb'),
@@ -107,6 +123,8 @@ ui.disconnect.addEventListener('click', async () => {
   station = null;
   simulator = null;
   setStatus('', 'Nothing connected');
+  showDevice(null);
+  lastInfo = null;
   $('currentMode').textContent = 'unknown';
   $('remotePanel').hidden = true;
   $('cancelWake').hidden = true;
@@ -155,10 +173,22 @@ async function attach(next) {
 
 let lastInfo = null;
 
+/** Name the connected station in the top bar. */
+function showDevice(info) {
+  if (!info) {
+    $('deviceName').textContent = 'No station';
+    $('deviceDetail').textContent = 'nothing connected';
+    return;
+  }
+  $('deviceName').textContent = info.modelName;
+  $('deviceDetail').textContent = `#${info.serialNumber} · code ${info.code} · ${info.modeName}`;
+}
+
 async function refreshFacts() {
   if (!station) return;
   const info = await station.readInfo();
   lastInfo = info;
+  showDevice(info);
   const offset = await station.getClockOffset();
 
   setCircle(info.code);
@@ -644,6 +674,7 @@ async function run(task) {
 
 function addCard(card) {
   readCards.push(card);
+  showTab('cards'); // bring the readout into view rather than hiding it
   const article = document.createElement('article');
   article.className = 'readout';
 
