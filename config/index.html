@@ -532,6 +532,12 @@
               <input type="checkbox" id="checkBattery" checked />
               Look up SIAC battery dates online
             </label>
+            <p class="hint">
+              Asks SPORTident when a SIAC's battery was made. It needs the
+              internet, and SPORTident only answer browsers on origins they
+              have allowed &mdash; on another domain the browser blocks it and
+              the serial log says so. Cards and stations never depend on it.
+            </p>
           </div>
         </section>
       </div>
@@ -609,7 +615,7 @@
 </script>
 
 <!-- the query is a cache buster: bump it when app.js changes shape -->
-<script type="module" src="./app.js?v=5"></script>
+<script type="module" src="./app.js?v=6"></script>
 <script>
   // Keep working when the network does not. Registration is best effort: the
   // page is perfectly usable without it, and a station needs no internet.

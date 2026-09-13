@@ -476,24 +476,67 @@ numbers (8000001 to 8999999) have a battery to ask about; anything else is
 refused before a request goes out.
 
 This is the one part of the library that needs the network, and it is entirely
-optional -- nothing else calls it. Two things to plan for:
-
-- **The CORS allowlist is narrow.** At the time of writing the API answers
-  browsers on `http://localhost:8080` and not much else: `localhost:3000`,
-  `127.0.0.1:8080` and a `github.io` origin were all refused. From another
-  origin the request fails with an opaque CORS error that looks exactly like
-  being offline. Ask SPORTident to allowlist your origin, pass `baseUrl` to
-  point at your own proxy, or call it from a server. Node has no CORS and just
-  works.
-- **Failures are normal.** A laptop at a finish tent often has no signal, so
-  every failure arrives as `SIBatteryLookupError` for you to ignore. Never let
-  it hold up showing a card that read perfectly well.
+optional -- nothing else calls it. Failures are normal: a laptop at a finish
+tent often has no signal, so every failure arrives as `SIBatteryLookupError`
+for you to ignore, and it must never hold up showing a card that read perfectly
+well.
 
 SPORTident ask for a client id, which `support@sportident.com` issues:
 
 ```js
 await fetchSiacBattery(8549150, { clientId: 'your-id' });
 ```
+
+#### The browser will block this on your own site
+
+The API decides which web pages may call it, and the list is short. Measured by
+sending each origin and watching for the header that permits it:
+
+| Origin the page is served from | Allowed |
+| --- | --- |
+| `http://localhost:8080` | yes |
+| `http://localhost:3000` | no |
+| `http://127.0.0.1:8080` | no |
+| `https://dulcilubio.github.io` | no |
+| `https://sportident.com` | no |
+
+So it works while you develop on port 8080 and **stops working the moment the
+page is deployed anywhere else**. This is the browser enforcing the API's
+cross-origin rules, not a fault in this library or in your code: the request
+leaves, the answer comes back, and the browser refuses to hand it over because
+the response carries no `Access-Control-Allow-Origin` for your site. What
+reaches JavaScript is an opaque failure indistinguishable from being offline,
+which is why the error message names both causes.
+
+None of this applies outside a browser. Node has no same-origin policy, so a
+server calling the same URL just works.
+
+Two ways to fix it for a deployed site:
+
+1. **Ask SPORTident to allowlist your origin**, at `support@sportident.com`,
+   along with the client id.
+2. **Call it from your own server instead**, which also keeps the client id off
+   the page. Any framework will do; the shape is the same:
+
+   ```js
+   // GET /api/siac/8549150  ->  forwards to SPORTident and returns the JSON
+   app.get('/api/siac/:card', async (request, response) => {
+     const upstream = await fetch(
+       `https://api.sportident.com/api/rest/v1/products/si-cards/${request.params.card}`,
+       { headers: { 'X-Sportident-Client-Id': process.env.SI_CLIENT_ID } }
+     );
+     response.status(upstream.status).json(await upstream.json());
+   });
+   ```
+
+   Then point the library at it. Same origin, so no CORS involved:
+
+   ```js
+   await fetchSiacBattery(card.cardNumber, { baseUrl: '/api/siac/' });
+   ```
+
+`baseUrl` is joined to the card number directly, so it needs the trailing
+slash.
 
 ### Backup memory
 

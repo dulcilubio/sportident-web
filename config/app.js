@@ -169,6 +169,7 @@ on('disconnect', 'click', async () => {
   showDevice(null);
   lastInfo = null;
   $('currentMode').textContent = 'unknown';
+  batteryExplained = false;
   $('remotePanel').hidden = true;
   $('cancelWake').hidden = true;
   showMode();
@@ -637,11 +638,38 @@ async function showBattery(cardNumber, note) {
     note.dataset.status = battery.status;
     write('rx', `card ${cardNumber}: ${wording[battery.status]}`);
   } catch (error) {
-    // Offline, or an origin the API will not talk to. Neither is worth a
-    // red error over a card that read perfectly well.
+    // Offline, or an origin the API will not talk to. Neither is worth a red
+    // error over a card that read perfectly well, but the two have different
+    // fixes, so say which is the likely one rather than leaving it a mystery.
     note.textContent = ' · battery not checked';
     note.title = error.message;
+    explainBatteryFailure();
   }
+}
+
+/**
+ * Say once why the lookup did not happen.
+ *
+ * A browser reports a blocked cross-origin request exactly like a dead
+ * network, so this cannot be certain. Being offline is knowable, though, and
+ * whichever it is has a different fix: wait for signal, or get the page's
+ * origin allowed by SPORTident.
+ */
+let batteryExplained = false;
+function explainBatteryFailure() {
+  if (batteryExplained) return;
+  batteryExplained = true;
+
+  const offline = !navigator.onLine;
+  write(
+    'err',
+    offline
+      ? 'SIAC battery lookup skipped: no network. Cards and stations are unaffected.'
+      : `SIAC battery lookup blocked for this page (${window.location.origin}). ` +
+          'SPORTident only answer browsers on origins they have allowed. Ask them to ' +
+          'add this one, or call the API from your own server and pass baseUrl. ' +
+          'Cards and stations are unaffected.'
+  );
 }
 
 // ------------------------------------------------------------------- commands
