@@ -113,11 +113,16 @@ to disconnect before another program can.
 operating mode including the Air+ beacon and SIAC special ones, control code,
 punch feedback, awake time, card readouts with splits, backup memory export,
 relaying to a station on the coupling stick, and a byte-level trace of the
-serial line. Serve the repository root and open `/config/`:
+serial line. Node.js and npm are not needed to run the tool. From the repository
+root, start Python's web server:
 
+```sh
+python3 -m http.server 8080
 ```
-npm run serve        # python3 -m http.server 8080
-```
+
+Then open [http://localhost:8080/config/](http://localhost:8080/config/).
+Keep the terminal running while using the tool; press `Ctrl+C` to stop the server.
+If you already have npm installed, `npm run serve` runs the same command.
 
 It keeps working when the network does not. Nothing about talking to a station
 needs the internet, so the page loads no fonts or scripts from anywhere else
@@ -223,6 +228,14 @@ read sequence that works for it: one command for SI-Card 5, three frames for
 SI-Card 6, block by block for 8/9/pCard, and all blocks at once for the 10
 family because reading those block by block is slow and unreliable.
 
+Readout stations with **Auto send** enabled can send card blocks without an
+insertion announcement. `SIReadout` also accepts these blocks and emits the same
+`card` event (not `cardRead`), with `autoRead` and `autoAck` respected. It waits
+for all required blocks; a five-second gap in an incomplete transfer produces
+`cardError`, never a partial card or an ACK. SI-Card 6 autosend with more than
+64 punches is currently rejected. Do not start manual reads during an autosend
+transfer: both use the same response command bytes.
+
 ### A card that is already in the station
 
 Stations announce a card when it goes in, and say nothing afterwards. Connect to
@@ -237,16 +250,23 @@ station.addEventListener('card', (e) => console.log(e.detail.cardNumber));
 
 Ask at any time with `detectCard()`, which resolves to `null` when the slot is
 empty rather than throwing. Pass `detectOnConnect: false` to skip the probe.
+The connection probe is also skipped when Auto send is enabled, to avoid
+competing with the card data the station sends itself. Reinsert a card whose
+autosend data was transmitted before the connection opened.
 
-### Reading cards or streaming punches, not both
+### Handshake and Auto send
 
-The protocol byte ties handshake and auto-send together as opposites, so a
-station does one or the other:
+`setAutoSend()` sets the handshake bit to the opposite of Auto send. What the
+station transmits also depends on its operating mode:
 
 | | handshake | auto-send | what you get |
 | --- | --- | --- | --- |
 | `setAutoSend(false)` | on | off | cards read on insertion |
-| `setAutoSend(true)` | off | on | punches sent as they happen |
+| `setAutoSend(true)` | off | on | card blocks in Readout mode; live punches in Control mode |
+
+For ordinary card readout, `await station.setAutoSend(false)` selects the
+request/reply path. [SPORTident recommends this configuration](https://docs.sportident.com/user-guide/config-plus)
+because Auto send omits some card data, including the finish reserve record.
 
 A station in readout mode with neither bit set stays silent when a card goes
 in, which is the usual cause of "readout mode does not read out".
@@ -591,7 +611,7 @@ await station.setBaudRateHigh();      // or setBaudRateLow(), the port follows
 await station.eraseBackup();
 await station.beep(2);
 await station.powerOff();
-await station.powerOffRemote();       // the odd byte sequence Config+ uses
+await station.powerOffRemote();       // targets the station on the stick and waits for its reply
 ```
 
 Preparing a batch of stations, the equivalent of `si_normalize_station.py`:

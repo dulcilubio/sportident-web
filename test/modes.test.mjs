@@ -198,3 +198,38 @@ test('switching target drops sysval cached from the other station', async () => 
 
   await station.disconnect();
 });
+
+for (const target of ['direct', 'remote']) {
+  for (const reply of [true, false]) {
+    test(`remote switch-off from ${target}, reply=${reply}`, async () => {
+      const { sim, station } = await connected();
+      if (target === 'remote') await station.setRemote();
+      station.timeout = 20;
+      station.retries = 1;
+      const sent = [];
+      let relay = target === 'remote';
+      const realWrite = sim.write.bind(sim);
+      sim.write = (bytes) => {
+        const start = bytes[0] === 0xff ? 1 : 0;
+        const cmd = bytes[start + 1];
+        sent.push(cmd);
+        if (cmd === CMD.SET_MS) relay = bytes[start + 3] === P_MS_INDIRECT;
+        if (cmd === CMD.OFF) {
+          assert.equal(relay, true, 'OFF must never reach the cabled station');
+          if (!reply) return Promise.resolve();
+        }
+        return realWrite(bytes);
+      };
+      try {
+        if (reply) await station.powerOffRemote();
+        else await assert.rejects(station.powerOffRemote(), { name: 'SITimeoutError' });
+        assert.deepEqual(sent, target === 'direct'
+          ? [CMD.SET_MS, CMD.OFF, CMD.SET_MS]
+          : [CMD.OFF], 'no raw sequence, wake polling or OFF retry');
+        assert.equal(station.target, target, 'restore the target even on timeout');
+      } finally {
+        await station.disconnect();
+      }
+    });
+  }
+}

@@ -17,7 +17,7 @@
  * stale answer would be worse than an honest failure.
  */
 
-const VERSION = 'si-tool-v1';
+const VERSION = 'si-tool-v2';
 
 /** Everything needed to start the page with no network at all. */
 const SHELL = [

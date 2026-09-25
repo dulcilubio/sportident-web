@@ -232,6 +232,7 @@ async function refreshFacts() {
   if (!station) return;
   const info = await station.readInfo();
   lastInfo = info;
+  showPunchMode();
   showDevice(info);
   const offset = await station.getClockOffset();
 
@@ -570,8 +571,8 @@ on('toggleProtocol', 'click', () =>
 on('powerOffRemote', 'click', () =>
   run(async () => {
     await station.powerOffRemote();
-    write('tx', 'sent the switch-off sequence to the remote station');
-    setStatus('warn', 'Remote station switched off');
+    write('rx', 'remote station acknowledged the switch-off command');
+    setStatus('warn', 'Remote station acknowledged switch-off');
   })
 );
 
@@ -584,7 +585,9 @@ function showPunchMode() {
   const radio = document.querySelector(`input[name="punchMode"][value="${value}"]`);
   if (radio) radio.checked = true;
   $('punchModeNote').textContent = autosend
-    ? 'Punches arrive as they happen. Card readout is off while this is on.'
+    ? station?.mode === MODE.READOUT
+      ? 'The station sends card data automatically. Complete cards appear under Cards read.'
+      : 'Punches arrive as they happen. Select Readout mode to receive complete cards.'
     : 'Cards are read when inserted. Live punches are off while this is on.';
 }
 

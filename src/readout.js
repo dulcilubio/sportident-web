@@ -31,6 +31,8 @@ import {
 import { SIStation } from './station.js';
 
 export class SIReadout extends SIStation {
+  #autoTransfer = null;
+
   /**
    * @param {object} transport
    * @param {object} [options] everything SIStation takes, plus:
@@ -51,6 +53,8 @@ export class SIReadout extends SIStation {
     /** Data layout of the card currently in the station, or null. */
     this.cardType = null;
     this.busy = false;
+    this.addEventListener('close', () => this.#clearAutoTransfer());
+    this.addEventListener('error', () => this.#clearAutoTransfer());
   }
 
   /**
@@ -64,6 +68,7 @@ export class SIReadout extends SIStation {
     await super.connect(options);
     if (!this.detectOnConnect) return;
     if (this.protoConfig?.mode !== MODE.READOUT) return;
+    if (this.protoConfig.autoSend) return; // the station sends the dump itself
 
     try {
       await this.detectCard();
@@ -90,7 +95,14 @@ export class SIReadout extends SIStation {
 
   handleUnsolicited(frame) {
     switch (frame.cmd) {
+      case CMD.GET_SI5:
+      case CMD.GET_SI6:
+      case CMD.GET_SI9:
+        this.#receiveAutoBlock(frame);
+        return;
+
       case CMD.SI_REM:
+        this.#clearAutoTransfer();
         this.cardNumber = null;
         this.cardType = null;
         this.dispatchEvent(new CustomEvent('cardRemoved'));
@@ -134,6 +146,81 @@ export class SIReadout extends SIStation {
     }
   }
 
+  #clearAutoTransfer() {
+    clearTimeout(this.#autoTransfer?.timer);
+    this.#autoTransfer = null;
+  }
+
+  #autoError(error) {
+    this.#clearAutoTransfer();
+    this.dispatchEvent(new CustomEvent('cardError', {
+      detail: { error, cardNumber: this.cardNumber },
+    }));
+  }
+
+  #receiveAutoBlock(frame) {
+    try {
+      const single = frame.cmd === CMD.GET_SI5;
+      if (frame.data.length !== (single ? 128 : 129)) {
+        throw new SIProtocolError('Autosend card block has an invalid length');
+      }
+      const block = single ? 0 : frame.data[0];
+      const data = single ? frame.data : frame.data.subarray(1);
+      if (block === 0) {
+        this.#clearAutoTransfer();
+        const layout = single ? CARD.SI5 : frame.cmd === CMD.GET_SI6 ? CARD.SI6 : CARD.SI8;
+        const number = decodeCardNumber(Uint8Array.of(
+          0, data[layout.CN2], data[layout.CN1], data[layout.CN0]
+        ));
+        const type = single ? 'SI5' : frame.cmd === CMD.GET_SI6 ? 'SI6' : cardTypeFromDetect(number);
+        if (!type || number === 0) throw new SIProtocolError('Unknown autosend card type');
+        if (type === 'SI6' && data[layout.RC] > CARD.SI6.PM) {
+          throw new SIProtocolError('Autosend SI-Card 6 with more than 64 punches is not supported');
+        }
+        const inserted = this.cardNumber !== number || this.cardType !== type;
+        this.cardNumber = number;
+        this.cardType = type;
+        this.#autoTransfer = {
+          cmd: frame.cmd, station: frame.station, type, blocks: new Map(),
+          wanted: single ? [0] : type === 'SI6' ? [0, 6, 7]
+            : type === 'SI10' ? [0, 4, 5, 6, 7] : [0, 1],
+        };
+        if (inserted) this.#cardInserted(false);
+      }
+      const transfer = this.#autoTransfer;
+      // A continuation without block zero cannot safely identify a card.
+      if (!transfer || transfer.cmd !== frame.cmd || transfer.station !== frame.station) {
+        throw new SIProtocolError('Autosend card block arrived without a matching first block');
+      }
+      transfer.blocks.set(block, data.slice());
+      clearTimeout(transfer.timer);
+      if (transfer.wanted.every((n) => transfer.blocks.has(n))) {
+        const raw = concatAll(transfer.wanted.map((n) => transfer.blocks.get(n)));
+        const card = decodeCardData(raw, transfer.type);
+        card.raw = raw;
+        this.#clearAutoTransfer();
+        if (this.autoRead) {
+          this.#deliverAutoCard(card).catch((error) => {
+            this.dispatchEvent(new CustomEvent('cardError', {
+              detail: { error, cardNumber: card.cardNumber },
+            }));
+          });
+        }
+      } else {
+        transfer.timer = setTimeout(() => this.#autoError(
+          new SITimeoutError('Incomplete autosend card data: missing blocks')
+        ), 5000);
+      }
+    } catch (error) {
+      this.#autoError(error);
+    }
+  }
+
+  async #deliverAutoCard(card) {
+    if (this.autoAck) await this.ackCard();
+    this.dispatchEvent(new CustomEvent('card', { detail: card }));
+  }
+
   /**
    * Ask the station whether a card is sitting in it right now.
    *
@@ -153,7 +240,7 @@ export class SIReadout extends SIStation {
    */
   async detectCard({ read = true } = {}) {
     this.assertReadoutMode();
-    if (this.busy) return null;
+    if (this.busy || this.#autoTransfer) return null;
 
     const found = await this.#probeForCard();
     if (!found) return null;
@@ -218,12 +305,12 @@ export class SIReadout extends SIStation {
     return null;
   }
 
-  #cardInserted() {
+  #cardInserted(read = true) {
     const detail = { cardNumber: this.cardNumber, cardType: this.cardType };
     this.dispatchEvent(new CustomEvent('cardInserted', { detail }));
     this.notifyCardChanged('A card was put in during the command');
 
-    if (!this.autoRead || this.busy) return;
+    if (!read || !this.autoRead || this.busy || this.protoConfig?.autoSend) return;
     this.busy = true;
     const inserted = this.cardNumber;
 

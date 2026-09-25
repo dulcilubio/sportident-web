@@ -28,7 +28,6 @@ import {
   O,
   P_MS_DIRECT,
   P_MS_INDIRECT,
-  REMOTE_OFF,
   SUPPORTED_MODES,
   SIAC_FUNCTIONS,
   SIAC_MODES,
@@ -379,6 +378,15 @@ export class SIStation extends EventTarget {
     }
 
     const pending = this.#pending;
+    // Card blocks can be either command replies or autosend data. A matching
+    // request owns its replies; only unmatched blocks go to the readout class.
+    if (
+      [CMD.GET_SI5, CMD.GET_SI6, CMD.GET_SI9].includes(frame.cmd) &&
+      (!pending || (pending.responseCmd !== null && pending.responseCmd !== frame.cmd))
+    ) {
+      this.handleUnsolicited(frame);
+      return;
+    }
     if (!pending) {
       this.dispatchEvent(new CustomEvent('unexpectedFrame', { detail: frame }));
       return;
@@ -406,6 +414,8 @@ export class SIStation extends EventTarget {
     if (frame.cmd === CMD.TRANS_REC) {
       const punch = decodeAutosendPunch(frame.data);
       this.dispatchEvent(new CustomEvent('punch', { detail: punch }));
+    } else if ([CMD.GET_SI5, CMD.GET_SI6, CMD.GET_SI9].includes(frame.cmd)) {
+      this.dispatchEvent(new CustomEvent('unexpectedFrame', { detail: frame }));
     }
   }
 
@@ -1036,11 +1046,15 @@ export class SIStation extends EventTarget {
   }
 
   /**
-   * Switch off a remote station. This is the odd byte sequence Config+ uses;
-   * it is not a normal command frame and there is no reply.
+   * Switch off the station on the coupling stick and wait for its reply.
+   * Restore the previous target, without polling or retrying the OFF command:
+   * a retry could wake a station that switched off but whose reply was lost.
    */
   async powerOffRemote() {
-    await this.sendRaw(REMOTE_OFF);
+    await this.withRemote(
+      () => this.sendCommand(CMD.OFF, [], { retries: 0 }),
+      { wake: false }
+    );
   }
 
   // ------------------------------------------------------------ backup memory
