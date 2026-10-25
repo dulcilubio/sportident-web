@@ -33,6 +33,13 @@ test('modes can be set by name or by constant', async () => {
   await station.setOperatingMode('  ReadOut ');
   assert.equal(station.mode, MODE.READOUT);
 
+  await station.setOperatingMode('printout');
+  assert.equal(station.mode, 0x0b);
+  assert.equal(station.modeName, 'Printout');
+
+  await station.setOperatingMode(MODE.PRINTOUT);
+  assert.equal(station.mode, MODE.PRINTOUT);
+
   await station.disconnect();
 });
 

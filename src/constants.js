@@ -223,6 +223,7 @@ export const SUPPORTED_MODES = [
   MODE.START,
   MODE.FINISH,
   MODE.READOUT,
+  MODE.PRINTOUT,
   MODE.CLEAR,
   MODE.CHECK,
 ];
@@ -245,6 +246,7 @@ export const MODE_BY_NAME = {
   start: MODE.START,
   finish: MODE.FINISH,
   readout: MODE.READOUT,
+  printout: MODE.PRINTOUT,
   clear: MODE.CLEAR,
   check: MODE.CHECK,
   // Air+ / SIAC beacon modes. Written as the 0x12 form first; stations that

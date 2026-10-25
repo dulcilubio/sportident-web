@@ -112,7 +112,9 @@ test('missing blocks time out without emitting or acknowledging a partial card',
   const r = await setup(t);
   t.mock.timers.enable({ apis: ['setTimeout'] });
   r.station.handleUnsolicited(fixture('SI8', 2125966)[0]);
+  assert.equal(r.station.isCommunicating, true, 'heartbeat must wait for the remaining card blocks');
   t.mock.timers.tick(5000);
+  assert.equal(r.station.isCommunicating, false, 'timed-out transfers release the idle state');
   assert.equal(r.errors.length, 1);
   assert.equal(r.errors[0].name, 'SITimeoutError');
   assert.equal(r.cards.length, 0);

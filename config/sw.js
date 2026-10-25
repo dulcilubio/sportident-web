@@ -11,19 +11,21 @@
  * so losing the internet must not cost you the tool.
  *
  * Everything the page is built from is cached on first visit and served from
- * there afterwards, with the network used to refresh quietly in the
- * background. Requests to other origins, such as the SIAC battery lookup, are
+ * there when offline, with fresh files fetched first when online. Requests to
+ * other origins, such as the SIAC battery lookup, are
  * never cached: they are the one part that genuinely needs a connection, and a
  * stale answer would be worse than an honest failure.
  */
 
-const VERSION = 'si-tool-v2';
+const VERSION = 'si-tool-v9';
 
 /** Everything needed to start the page with no network at all. */
 const SHELL = [
   './',
   './index.html',
   './app.js',
+  './configuration.js',
+  './heartbeat.js',
   '../src/battery.js',
   '../src/bytes.js',
   '../src/connect.js',
@@ -77,21 +79,16 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     (async () => {
       const cache = await caches.open(VERSION);
-      const hit = await cache.match(request, { ignoreSearch: true });
-
-      // Refresh in the background so a later visit gets the newer file, but
-      // never make the page wait for the network to time out.
-      const fresh = fetch(request)
-        .then((response) => {
-          if (response.ok) cache.put(request, response.clone());
-          return response;
-        })
-        .catch(() => null);
-
-      if (hit) return hit;
-
-      const response = await fresh;
-      if (response) return response;
+      try {
+        const response = await fetch(request, { cache: 'no-cache' });
+        if (response.ok) {
+          await cache.put(request, response.clone()).catch(() => {});
+        }
+        return response;
+      } catch {
+        const hit = await cache.match(request, { ignoreSearch: true });
+        if (hit) return hit;
+      }
 
       // Nothing cached and nothing reachable.
       return new Response('Offline, and this file was never cached.', {

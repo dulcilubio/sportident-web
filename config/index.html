@@ -287,6 +287,29 @@
       to { opacity: 1; transform: none; }
     }
   }
+
+  [hidden] { display: none !important; }
+  .targetbar { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 14px 16px; margin-bottom: 20px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }
+  .target-toggle { border: 0; padding: 0; margin: 0; display: flex; gap: 12px; }
+  .target-toggle legend { font-size: 11px; color: var(--ink-soft); margin-bottom: 5px; }
+  .target-toggle label { cursor: pointer; font-weight: 600; }
+  .target-toggle label { padding: 5px 9px; border: 1px solid var(--line); border-radius: 4px; }
+  .target-toggle label:has(input:checked) { border-color: var(--accent); background: #eaf4fc; }
+  #targetDescription, #lastRead { color: var(--ink-soft); font-size: 12px; }
+  .connection-health { margin-left: auto; font-size: 12px; }
+  #healthState[data-health='good'] { color: var(--live); }
+  #healthState[data-health='bad'] { color: var(--bad); }
+  .overview-tools { align-items: center; margin-bottom: 14px; }
+  summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+  .applybar { margin: 16px 0; padding: 14px 16px; background: #edf4fa; border: 1px solid #c9dce9; border-radius: 4px; }
+  #configurationError { color: var(--bad); }
+  #changeSummary { padding-left: 22px; }
+  .station-actions { margin-top: 20px; }
+  .danger { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 10px; }
+  .danger summary { color: var(--bad); }
+  .grid { grid-template-columns: repeat(auto-fit, minmax(min(290px, 100%), 1fr)); }
+  button:focus-visible, summary:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
 </style>
 </head>
 <body>
@@ -319,14 +342,12 @@
   <nav class="rail" role="tablist" aria-label="Sections">
     <div class="group">Station</div>
     <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
-    <button role="tab" data-tab="mode" aria-selected="false">Operating mode</button>
-    <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
-    <button role="tab" data-tab="remote" aria-selected="false">Remote station</button>
+    <button role="tab" data-tab="configure" aria-selected="false">Configure</button>
     <div class="group">Data</div>
-    <button role="tab" data-tab="cards" aria-selected="false">Cards</button>
+    <button role="tab" data-tab="cards" aria-selected="false">Cards &amp; punches</button>
     <button role="tab" data-tab="backup" aria-selected="false">Backup memory</button>
     <div class="group">Service</div>
-    <button role="tab" data-tab="log" aria-selected="false">Serial traffic</button>
+    <button role="tab" data-tab="log" aria-selected="false">Diagnostics</button>
   </nav>
 
   <div class="work">
@@ -336,41 +357,38 @@
       battery lookup needs the internet, and it will be skipped.
     </p>
 
-    <!-- ------------------------------------------------------------ overview -->
+    <section class="targetbar" aria-label="Selected station">
+      <fieldset class="target-toggle">
+        <legend>Configure and read</legend>
+        <label><input type="radio" name="target" value="direct" checked disabled /> Direct</label>
+        <label><input type="radio" name="target" value="remote" disabled /> Remote</label>
+      </fieldset>
+      <div><strong id="targetIdentity">No station selected</strong><br /><span id="targetDescription">Direct: the station connected by cable</span></div>
+      <div class="connection-health" role="status"><span id="healthState">Disconnected</span><br /><small id="lastResponse">Last response: —</small></div>
+      <button id="cancelWake" hidden>Stop waking</button>
+    </section>
+
     <div class="panel" id="panel-overview">
       <h2>Overview</h2>
-      <p class="lede">What the connected station reports about itself.</p>
+      <p class="lede">Reported settings for the selected station. Nothing here changes its configuration.</p>
+      <div class="row overview-tools"><button id="refreshOverview" disabled>Refresh</button><span id="lastRead">Not read yet</span></div>
       <div class="grid">
-        <section class="card">
-          <h3>Station</h3>
-          <dl class="facts" id="facts"></dl>
-        </section>
-        <section class="card">
-          <h3>Quick actions</h3>
-          <div class="stack">
-            <button id="beep" disabled>Beep the station</button>
-            <button id="syncClock" disabled>Set clock to this computer</button>
-            <button id="detectCard" disabled>Read the card that is in now</button>
-            <button id="powerOff" disabled>Switch the station off</button>
-          </div>
-        </section>
+        <section class="card wide"><h3>Station</h3><dl class="facts" id="facts"></dl></section>
+        <section class="card wide"><details><summary>Technical details</summary><dl class="facts" id="technicalFacts"></dl></details></section>
       </div>
     </div>
 
-    <!-- ---------------------------------------------------------------- mode -->
-    <div class="panel" id="panel-mode" hidden>
-      <h2>Operating mode</h2>
-      <p class="lede">
-        <strong id="currentMode">unknown</strong> &mdash; on
-        <span id="modeTarget">the cabled station</span>.
-      </p>
+    <div class="panel" id="panel-configure" hidden>
+      <h2>Configure</h2>
+      <p class="lede">Edit the selected station, review the changes, then apply. Direct and remote stations use the same settings.</p>
+      <form id="configurationForm">
       <div class="grid">
-        <section class="card">
-          <h3>Set the mode</h3>
-          <div class="stack">
-            <select id="modeSelect" disabled aria-label="Operating mode">
+        <section class="card"><h3>Station function</h3><div class="stack">
+          <label for="modeSelect">Operating mode</label>
+          <select id="modeSelect" disabled>
               <optgroup label="Contact punching">
                 <option value="mode:readout">Readout</option>
+                <option value="mode:printout">Printout</option>
                 <option value="mode:control">Control</option>
                 <option value="mode:start">Start</option>
                 <option value="mode:finish">Finish</option>
@@ -390,136 +408,53 @@
                 <option value="siac:radio-readout">SIAC radio readout</option>
                 <option value="siac:test">SIAC test</option>
               </optgroup>
-            </select>
-            <p class="hint">
-              Beacon stations keep taking contact punches as well. SIAC special
-              stations do not &mdash; they perform that one function only, and
-              their control code is set for them.
-            </p>
-          </div>
-        </section>
-
-        <section class="card">
-          <h3>Punch handling</h3>
-          <div class="stack">
-            <label class="toggle">
-              <input type="radio" name="punchMode" value="readout" checked disabled />
-              Read cards on insertion <em>(handshake)</em>
-            </label>
-            <label class="toggle">
-              <input type="radio" name="punchMode" value="autosend" disabled />
-              Send cards or punches automatically <em>(auto-send)</em>
-            </label>
-            <p class="hint" id="punchModeNote"></p>
-            <p class="hint">
-              Auto-send delivers card data in Readout mode and live punches in
-              Control mode. Selecting it turns handshake off.
-            </p>
-          </div>
-        </section>
+          </select>
+          <p class="hint" id="modeNote"></p>
+          <label for="codeInput">Control code</label>
+          <input id="codeInput" type="number" min="1" max="1023" step="1" disabled />
+          <p class="hint" id="codeNote">1 to 1023</p>
+        </div></section>
+        <section class="card"><h3>Data transfer</h3><div class="stack">
+          <label for="transferSelect">How data is sent</label>
+          <select id="transferSelect" disabled>
+            <option value="handshake">Handshake (auto-send off)</option>
+            <option value="autosend">Auto-send (handshake off)</option>
+            <option value="custom" disabled>Other combination reported by station</option>
+          </select>
+          <p class="hint" id="transferNote"></p>
+          <p class="hint">Choosing auto-send turns handshake off. Choosing handshake turns auto-send off.</p>
+        </div></section>
+        <section class="card"><h3>Feedback and power</h3><div class="stack">
+          <label class="toggle"><input type="checkbox" id="fbBeeper" disabled /> Beep on a punch</label>
+          <label class="toggle"><input type="checkbox" id="fbLamp" disabled /> Flash on a punch</label>
+          <label for="activeInput">Awake time (minutes)</label>
+          <input id="activeInput" type="number" min="0" max="5759" step="1" disabled />
+          <p class="hint">In Air+ mode, allow for the whole event: contactless punches do not restart the awake timer.</p>
+        </div></section>
+        <section class="card"><h3>Advanced</h3><div class="stack">
+          <label class="toggle"><input type="checkbox" id="extendedProtocol" disabled /> Extended protocol</label>
+          <p class="hint">This app needs extended protocol for card readout and live punch decoding. The cabled station also needs it to relay to a remote station.</p>
+          <button type="button" id="saveSysval" disabled>Download current configuration</button>
+        </div></section>
       </div>
-    </div>
-
-    <!-- ------------------------------------------------------------ settings -->
-    <div class="panel" id="panel-settings" hidden>
-      <h2>Settings</h2>
-      <p class="lede">Changes are written to the station as you make them.</p>
-      <div class="grid">
-        <section class="card">
-          <h3>Control code</h3>
-          <div class="stack">
-            <div class="row">
-              <input id="codeInput" type="number" min="1" max="1023" step="1" value="31"
-                     disabled aria-label="Control code" />
-              <button id="setCode" disabled>Set</button>
-            </div>
-            <p class="hint">
-              1 to 1023. Codes above 255 keep their top bits in the feedback
-              byte, so the station writes both at once.
-            </p>
-          </div>
-        </section>
-
-        <section class="card">
-          <h3>Punch feedback</h3>
-          <div class="stack">
-            <label class="toggle"><input type="checkbox" id="fbBeeper" disabled /> Beep on a punch</label>
-            <label class="toggle"><input type="checkbox" id="fbLamp" disabled /> Flash on a punch</label>
-            <p class="hint">Applied as you tick them. Use the beep button to hear the difference.</p>
-          </div>
-        </section>
-
-        <section class="card">
-          <h3>Awake time</h3>
-          <div class="stack">
-            <div class="row">
-              <input id="activeInput" type="number" min="1" max="5759" step="1" value="240"
-                     disabled aria-label="Minutes awake" />
-              <button id="setActive" disabled>Set</button>
-            </div>
-            <p class="hint">
-              Minutes awake after a punch, max 5759. In AIR+ mode a contactless
-              punch does <em>not</em> restart it &mdash; only a direct punch does
-              &mdash; so allow for the whole event. SPORTident suggest 720.
-            </p>
-          </div>
-        </section>
-
-        <section class="card">
-          <h3>Protocol</h3>
-          <div class="stack">
-            <button id="toggleProtocol" disabled>Switch to legacy protocol</button>
-            <p class="hint">
-              Extended protocol is needed for backup memory and for relaying to
-              a remote station.
-            </p>
-          </div>
-        </section>
-      </div>
-    </div>
-
-    <!-- -------------------------------------------------------------- remote -->
-    <div class="panel" id="panel-remote" hidden>
-      <h2>Remote station</h2>
-      <p class="lede">
-        The cabled station can relay to a second one standing on its coupling
-        stick, so it can be configured without being plugged in.
-      </p>
-      <div class="grid">
-        <section class="card">
-          <h3>Where commands go</h3>
-          <div class="stack">
-            <label class="toggle">
-              <input type="radio" name="target" value="direct" checked disabled />
-              Direct &mdash; the cabled station
-            </label>
-            <label class="toggle">
-              <input type="radio" name="target" value="remote" disabled />
-              Remote &mdash; the station standing on top
-            </label>
-            <button id="readRemote" disabled>Read the remote station</button>
-            <button id="cancelWake" hidden>Stop waking</button>
-            <button id="powerOffRemote" disabled>Switch the remote station off</button>
-            <p class="hint">
-              A sleeping station takes a while to rouse &mdash; 11 and 23 seconds
-              on the two measured here &mdash; so allow up to half a minute.
-              Every command goes to the selected station, including the
-              destructive ones.
-            </p>
-          </div>
-        </section>
-
-        <section class="card" id="remotePanel" hidden>
-          <h3>Station on the stick</h3>
-          <dl class="facts" id="remoteFacts"></dl>
-        </section>
+      <section class="applybar" aria-label="Review configuration changes">
+        <strong id="draftState">No changes</strong>
+        <ul id="changeSummary"></ul>
+        <p id="configurationError" role="alert"></p>
+        <div class="row"><button type="submit" id="applyChanges" class="primary" disabled>Apply changes</button><button type="button" id="discardChanges" disabled>Discard changes</button></div>
+      </section>
+      </form>
+      <div class="grid station-actions">
+        <section class="card"><h3>Clock</h3><p id="clockDifference">Clock difference: —</p><button id="syncClock" disabled>Set clock to this computer</button></section>
+        <section class="card"><h3>Station actions</h3><div class="stack"><button id="beep" disabled>Identify with beep</button><button id="powerOff" disabled>Switch selected station off</button></div><p class="hint">Actions affect the selected station immediately.</p></section>
       </div>
     </div>
 
     <!-- --------------------------------------------------------------- cards -->
     <div class="panel" id="panel-cards" hidden>
-      <h2 id="resultsHeading">Cards read</h2>
-      <p class="lede">Put a card in the station and the readout appears here.</p>
+      <h2 id="resultsHeading">Cards &amp; punches</h2>
+      <p class="lede" id="dataWorkflow">Connect a station to see the available data workflow.</p>
+      <button id="detectCard" disabled>Read inserted card</button>
       <div class="grid">
         <section class="card wide">
           <h3>List</h3>
@@ -555,11 +490,11 @@
       </p>
       <div class="grid">
         <section class="card">
-          <h3>Read and clear</h3>
+          <h3>Read and export</h3>
           <div class="stack">
             <button id="readBackup" disabled>Read backup memory</button>
-            <button id="saveSysval" disabled>Download configuration</button>
-            <button id="eraseBackup" disabled>Erase backup memory</button>
+            <p class="hint" id="backupNote"></p>
+            <details class="danger"><summary>Erase station data</summary><p>Read and download the backup first. Erasing cannot be undone.</p><button id="eraseBackup" disabled>Erase backup memory</button></details>
             <p class="hint">
               Erasing cannot be undone. Read and download first if the day still
               matters.
@@ -571,7 +506,7 @@
 
     <!-- ----------------------------------------------------------------- log -->
     <div class="panel" id="panel-log" hidden>
-      <h2>Serial traffic</h2>
+      <h2>Diagnostics</h2>
       <p class="lede">Every frame in and out, for when a station will not behave.</p>
       <label class="toggle" style="margin-bottom: 10px">
         <input type="checkbox" id="showHex" /> Show every byte
@@ -599,8 +534,15 @@
       for (var i = 0; i < tabs.length; i++) {
         var active = tabs[i].getAttribute('data-tab') === name;
         tabs[i].setAttribute('aria-selected', active ? 'true' : 'false');
+        tabs[i].tabIndex = active ? 0 : -1;
+        tabs[i].id = 'tab-' + tabs[i].getAttribute('data-tab');
+        tabs[i].setAttribute('aria-controls', 'panel-' + tabs[i].getAttribute('data-tab'));
         var panel = document.getElementById('panel-' + tabs[i].getAttribute('data-tab'));
-        if (panel) panel.hidden = !active;
+        if (panel) {
+          panel.hidden = !active;
+          panel.setAttribute('role', 'tabpanel');
+          panel.setAttribute('aria-labelledby', tabs[i].id);
+        }
       }
     }
 
@@ -609,13 +551,28 @@
       if (tab) show(tab.getAttribute('data-tab'));
     });
 
+    rail.addEventListener('keydown', function (event) {
+      var tabs = Array.from(rail.querySelectorAll('button[data-tab]'));
+      var index = tabs.indexOf(event.target);
+      if (index < 0) return;
+      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') index = (index + 1) % tabs.length;
+      else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') index = (index + tabs.length - 1) % tabs.length;
+      else if (event.key === 'Home') index = 0;
+      else if (event.key === 'End') index = tabs.length - 1;
+      else return;
+      event.preventDefault();
+      show(tabs[index].getAttribute('data-tab'));
+      tabs[index].focus();
+    });
+    show('overview');
+
     // app.js switches panels too, for instance when a card is read.
     window.showTab = show;
   })();
 </script>
 
 <!-- the query is a cache buster: bump it when app.js changes shape -->
-<script type="module" src="./app.js?v=6"></script>
+<script type="module" src="./app.js?v=9"></script>
 <script>
   // Keep working when the network does not. Registration is best effort: the
   // page is perfectly usable without it, and a station needs no internet.

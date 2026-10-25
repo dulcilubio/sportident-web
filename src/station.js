@@ -85,6 +85,7 @@ export class SIStation extends EventTarget {
   #parser;
   #pending = null;
   #queue = Promise.resolve();
+  #queued = 0;
   #closed = false;
 
   /**
@@ -159,6 +160,7 @@ export class SIStation extends EventTarget {
    * @param {number} [options.baudRate] start speed, defaults to 38400
    * @param {boolean} [options.tryLowSpeed] retry at 4800 baud, default true
    * @param {boolean} [options.handshake] send SET_MS on connect, default true
+   * @param {number} [options.handshakeRetries] extra attempts per speed, defaults to retries
    * @returns {Promise<SIStation>}
    */
   static async open(source, options = {}) {
@@ -172,13 +174,15 @@ export class SIStation extends EventTarget {
     baudRate = BAUD_HIGH,
     tryLowSpeed = true,
     handshake = true,
+    handshakeRetries = this.retries,
   } = {}) {
     await this.#transport.open({ baudRate });
     this.#closed = false;
+    this.dispatchEvent(new CustomEvent('connecting', { detail: { baudRate } }));
 
     if (handshake) {
       try {
-        await this.setDirect();
+        await this.setDirect({ retries: handshakeRetries });
       } catch (err) {
         if (!(err instanceof SITimeoutError) || !tryLowSpeed || baudRate === BAUD_LOW) {
           throw err;
@@ -186,8 +190,11 @@ export class SIStation extends EventTarget {
         // Older stations, and stations that were switched to the legacy speed,
         // only answer at 4800 baud.
         await this.#transport.setBaudRate(BAUD_LOW);
+        this.dispatchEvent(new CustomEvent('connecting', {
+          detail: { baudRate: BAUD_LOW, previousBaudRate: baudRate },
+        }));
         try {
-          await this.setDirect();
+          await this.setDirect({ retries: handshakeRetries });
         } catch (cause) {
           throw new SIConnectionError(
             'No SPORTident station answered at 38400 or 4800 baud. Is it awake and is this the right port?',
@@ -215,6 +222,11 @@ export class SIStation extends EventTarget {
 
   get baudRate() {
     return this.#transport.baudRate;
+  }
+
+  /** Whether a command is queued or waiting for a reply. */
+  get isCommunicating() {
+    return this.#queued > 0;
   }
 
   // ------------------------------------------------------------ command layer
@@ -292,7 +304,6 @@ export class SIStation extends EventTarget {
       await this.#transport.write(bytes);
     } catch (err) {
       this.#reject(err);
-      throw err;
     }
     return waiter;
   }
@@ -307,7 +318,8 @@ export class SIStation extends EventTarget {
   }
 
   #enqueue(fn) {
-    const run = this.#queue.then(fn, fn);
+    this.#queued++;
+    const run = this.#queue.then(fn, fn).finally(() => { this.#queued--; });
     this.#queue = run.then(
       () => {},
       () => {}
@@ -546,8 +558,8 @@ export class SIStation extends EventTarget {
   // ------------------------------------------------------------- station setup
 
   /** Talk to the station on the cable itself. */
-  async setDirect() {
-    await this.sendCommand(CMD.SET_MS, [P_MS_DIRECT]);
+  async setDirect(options = {}) {
+    await this.sendCommand(CMD.SET_MS, [P_MS_DIRECT], options);
     this.direct = true;
     this.sysval = null; // the sysval now on hand belongs to the other station
   }
@@ -750,9 +762,9 @@ export class SIStation extends EventTarget {
   }
 
   /**
-   * @param {number|string} mode one of MODE.CONTROL, START, FINISH, READOUT,
+   * @param {number|string} mode one of MODE.CONTROL, START, FINISH, READOUT, PRINTOUT,
    *   CLEAR, CHECK, or the same thing by name: 'start', 'check', 'finish',
-   *   'readout', 'clear', 'control'
+   *   'readout', 'printout', 'clear', 'control'
    */
   async setOperatingMode(mode) {
     const value = typeof mode === 'string' ? MODE_BY_NAME[mode.trim().toLowerCase()] : mode;

@@ -57,6 +57,7 @@ export class WebSerialTransport {
   #writer = null;
   #closing = false;
   #loop = null;
+  #ownsPort = false;
 
   /**
    * @param {SerialPort} port a port from requestPort() or getGrantedPorts()
@@ -103,14 +104,11 @@ export class WebSerialTransport {
         flowControl: 'none',
         bufferSize: 4096,
       });
+      this.#ownsPort = true;
     } catch (err) {
-      if (err?.name === 'InvalidStateError') {
-        // Already open from an earlier session in this page. Carry on.
-      } else {
-        throw new SIConnectionError(`Could not open the port: ${err.message}`, {
-          cause: err,
-        });
-      }
+      throw new SIConnectionError(`Could not open the port: ${err.message}`, {
+        cause: err,
+      });
     }
 
     try {
@@ -119,8 +117,15 @@ export class WebSerialTransport {
       // Not every driver supports setting the control lines. Not fatal.
     }
 
-    this.#writer = this.#port.writable.getWriter();
-    this.#loop = this.#readLoop();
+    try {
+      this.#writer = this.#port.writable.getWriter();
+      this.#loop = this.#readLoop();
+    } catch (err) {
+      await this.close({ keepPort: true });
+      throw new SIConnectionError(`Could not start the serial streams: ${err.message}`, {
+        cause: err,
+      });
+    }
   }
 
   async #readLoop() {
@@ -209,10 +214,13 @@ export class WebSerialTransport {
       }
       this.#writer = null;
     }
-    try {
-      await this.#port.close();
-    } catch {
-      /* already closed */
+    if (this.#ownsPort) {
+      try {
+        await this.#port.close();
+        this.#ownsPort = false;
+      } catch {
+        /* already closed or disconnected */
+      }
     }
     if (!keepPort) this.onClose();
   }

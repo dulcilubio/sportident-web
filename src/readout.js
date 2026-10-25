@@ -33,6 +33,10 @@ import { SIStation } from './station.js';
 export class SIReadout extends SIStation {
   #autoTransfer = null;
 
+  get isCommunicating() {
+    return super.isCommunicating || this.busy || this.#autoTransfer !== null;
+  }
+
   /**
    * @param {object} transport
    * @param {object} [options] everything SIStation takes, plus:

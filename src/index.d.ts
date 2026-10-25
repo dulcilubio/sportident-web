@@ -121,6 +121,7 @@ export type SIModeName =
   | 'start'
   | 'finish'
   | 'readout'
+  | 'printout'
   | 'clear'
   | 'check'
   | 'beacon-control'
@@ -190,6 +191,8 @@ export interface SIConnectOptions extends SIStationOptions {
   tryLowSpeed?: boolean;
   /** Send the direct-mode handshake on connect. Default true. */
   handshake?: boolean;
+  /** Extra handshake attempts at each baud rate. Defaults to the station's retries. */
+  handshakeRetries?: number;
 }
 
 export interface SICommandOptions {
@@ -400,6 +403,7 @@ export declare class SIStation extends EventTarget {
 
   readonly isOpen: boolean;
   readonly baudRate: number;
+  readonly isCommunicating: boolean;
 
   connect(options?: SIConnectOptions): Promise<this>;
   disconnect(): Promise<void>;
@@ -428,7 +432,7 @@ export declare class SIStation extends EventTarget {
   readonly mode: number | null;
   readonly modeName: string | null;
 
-  setDirect(): Promise<void>;
+  setDirect(options?: SICommandOptions): Promise<void>;
   setRemote(): Promise<void>;
   setTarget(target: SIStationTarget): Promise<void>;
   /**

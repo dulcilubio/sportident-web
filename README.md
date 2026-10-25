@@ -124,6 +124,42 @@ Then open [http://localhost:8080/config/](http://localhost:8080/config/).
 Keep the terminal running while using the tool; press `Ctrl+C` to stop the server.
 If you already have npm installed, `npm run serve` runs the same command.
 
+On desktop, **Connect** shows all serial ports, including ordinary USB-to-RS232
+adapters. Select the adapter attached to your SI reader and close any serial
+terminal using that port first. **Connect over USB** is the separate WebUSB
+option for supported devices without a serial driver; use **Connect** for an
+RS232 adapter. On browsers without Web Serial, **Connect** uses WebUSB.
+The tool retries the connection for up to 30 seconds at 38400 baud, then up to
+30 seconds at 4800 baud, stopping as soon as the station answers. The trace
+shows the initial speed and the switch to 4800 baud.
+
+**Overview** only reads station data. **Configure** holds mode, data transfer,
+control code, feedback, awake time and protocol in one form. Changes stay in a
+draft until **Apply changes**; **Discard changes** restores the last read values.
+The tool checks station identity before writing, then reads the settings back.
+If a write fails partway through, Overview shows the actual values and the
+remaining draft stays available for review.
+
+The **Direct / Remote** selector chooses which station all pages operate on.
+Both targets use the same fields. Apply or discard a draft before switching;
+remote settings remain unavailable until that station has been woken and read.
+Clock synchronization, identification beeps and shutdown are explicit actions
+in Configure; reading an inserted card is under **Cards & punches**.
+
+Inline guidance distinguishes app features from station capabilities. SIAC functions fix their control code. For BS7/8/9 firmware from
+649, Printout requires auto-send and extended protocol. Other hardware-dependent
+outputs are labeled rather than assumed. These rules follow the
+[Config+ guide](https://docs.sportident.com/user-guide/config-plus#advanced-settings)
+and [firmware notes](https://docs.sportident.com/products/stations/bs7-8-9-firmware).
+
+While connected, a read-time heartbeat runs every 60 seconds when idle, against
+the selected target. It skips commands and card transfers, waits up to two
+seconds without retries or a wake-up byte, and reports **Last response** and
+**Station not responding** without discarding drafts. The next successful
+response restores the health indicator. Shutdown pauses monitoring; Refresh
+resumes it. Browser background throttling can delay checks, and whether polling
+affects a station's sleep behavior still needs hardware verification.
+
 It keeps working when the network does not. Nothing about talking to a station
 needs the internet, so the page loads no fonts or scripts from anywhere else
 and a service worker caches everything it is built from: once opened, it opens
@@ -297,7 +333,7 @@ station.mode;      // 3
 station.modeName;  // 'Start'
 ```
 
-The settable modes are `control`, `start`, `finish`, `readout`, `clear` and
+The settable modes are `control`, `start`, `finish`, `readout`, `printout`, `clear` and
 `check`, plus the Air+ beacon modes `beacon-control`, `beacon-start`,
 `beacon-finish` and `beacon-readout`. Anything else is refused before a byte
 goes down the wire.

@@ -15,7 +15,7 @@
  */
 
 import {
-  BEACON_OLD_TO_NEW,
+  CMD,
   backupFilename,
   fetchSiacBattery,
   isSiacNumber,
@@ -25,8 +25,6 @@ import {
   formatTimeOfDay,
   hex,
   MODE,
-  MODE_BY_NAME,
-  SIAC_FUNCTIONS,
   getGrantedStations,
   requestStation,
   rowsToCsv,
@@ -36,6 +34,9 @@ import {
   toTransport,
   transportSupport,
 } from '../src/index.js';
+
+import { configuration, modeKey, capabilities, modeOptions, fieldLabels, changes, validateConfiguration, applyConfiguration } from './configuration.js';
+import { monitorStation } from './heartbeat.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -140,7 +141,8 @@ async function reconnectSilently() {
 
 async function connectWith(prefer) {
   try {
-    const source = await requestStation({ prefer });
+    // RS232 adapters have their own USB IDs, not SPORTident's.
+    const source = await requestStation({ prefer, anyPort: prefer === 'serial' });
     await attach(new SIReadout(toTransport(source)));
   } catch (error) {
     if (error?.name === 'NotFoundError') return; // the picker was dismissed
@@ -148,7 +150,7 @@ async function connectWith(prefer) {
   }
 }
 
-on('connect', 'click', () => connectWith('auto'));
+on('connect', 'click', () => connectWith(support.webSerial ? 'serial' : 'usb'));
 
 // Worth its own button because on macOS the serial picker is often empty --
 // Apple's driver ignores SPORTident's product id -- while WebUSB still works.
@@ -162,446 +164,403 @@ on('simulate', 'click', async () => {
 });
 
 on('disconnect', 'click', async () => {
+  if (operation || monitor?.checking) return;
+  if (hasDraft()) {
+    showTab('configure');
+    setStatus('warn', 'Apply or discard your changes before disconnecting');
+    return;
+  }
+  monitor?.stop();
+  monitor = null;
   await station?.disconnect().catch(() => {});
   station = null;
   simulator = null;
+  lastInfo = null;
+  baseline = null;
+  targetReady = false;
+  healthy = false;
   setStatus('', 'Nothing connected');
   showDevice(null);
-  lastInfo = null;
-  $('currentMode').textContent = 'unknown';
-  batteryExplained = false;
-  $('remotePanel').hidden = true;
-  $('cancelWake').hidden = true;
-  showMode();
   showTarget();
+  batteryExplained = false;
+  $('lastRead').textContent = 'Not read yet';
+  $('healthState').textContent = 'Disconnected';
+  $('lastResponse').textContent = 'Last response: —';
   ui.facts.replaceChildren();
+  $('technicalFacts').replaceChildren();
+  $('changeSummary').replaceChildren();
+  $('draftState').textContent = 'No changes';
+  $('configurationError').textContent = '';
   setCircle(null);
-  setControlsEnabled(false);
+  setControlsEnabled();
 });
 
 async function attach(next) {
+  if (station) return; // A picker or automatic reconnect may have finished first.
   station = next;
+  operation = true;
+  targetReady = false;
+  baseline = null;
+  startMonitoring();
+  ui.connect.disabled = true;
+  ui.connectUsb.disabled = true;
+  ui.simulate.disabled = true;
   setStatus('warn', 'Opening the port…');
 
   station.addEventListener('tx', (e) => logBytes('tx', e.detail.bytes));
   station.addEventListener('rx', (e) => logBytes('rx', e.detail.bytes));
+  station.addEventListener('connecting', (e) => {
+    const { baudRate, previousBaudRate } = e.detail;
+    const message = previousBaudRate
+      ? `No reply at ${previousBaudRate} baud; switched to ${baudRate} baud. Trying for up to 30 seconds…`
+      : `Connecting at ${baudRate} baud. Trying for up to 30 seconds…`;
+    write('tx', message);
+    setStatus('warn', message);
+  });
   station.addEventListener('error', (e) => fail(e.detail.error));
   station.addEventListener('garbage', (e) => write('err', `dropped: ${e.detail.reason}`));
-  station.addEventListener('close', () => setStatus('bad', 'The station went away'));
-  station.addEventListener('cardInserted', (e) =>
-    setStatus('warn', `Reading card ${e.detail.cardNumber}…`)
-  );
+  station.addEventListener('close', () => {
+    targetReady = false;
+    healthy = false;
+    setStatus('bad', 'The station went away');
+    setControlsEnabled();
+  });
+  station.addEventListener('cardInserted', (e) => {
+    if (station.autoRead) setStatus('warn', `Reading card ${e.detail.cardNumber}…`);
+    setTimeout(setControlsEnabled, 0);
+  });
   station.addEventListener('cardRemoved', () => setStatus('live', 'Ready for the next card'));
-  station.addEventListener('card', (e) => addCard(e.detail));
-  station.addEventListener('cardError', (e) => fail(e.detail.error));
+  station.addEventListener('card', (e) => { addCard(e.detail); setTimeout(setControlsEnabled, 0); });
+  station.addEventListener('cardError', (e) => { fail(e.detail.error); setTimeout(setControlsEnabled, 0); });
   station.addEventListener('punch', (e) => addPunch(e.detail));
 
   try {
-    await station.connect();
+    await station.connect({ handshakeRetries: 14 });
+    await refreshFacts();
+    showTarget();
+    setStatus('live', 'Connected and listening');
   } catch (error) {
+    await station.disconnect().catch(() => {});
     fail(error);
+    monitor?.stop();
     station = null;
-    return;
+    targetReady = false;
+  } finally {
+    operation = false;
+    setControlsEnabled();
   }
-
-  await refreshFacts();
-  showMode();
-  showTarget();
-  showPunchMode();
-  showFeedback();
-  setControlsEnabled(true);
-  setStatus('live', 'Connected and listening');
 }
 
 // -------------------------------------------------------------- station panel
 
 let lastInfo = null;
+let baseline = null;
+let baselineIdentity = null;
+let targetReady = false;
+let operation = false;
+let monitor = null;
+let healthy = false;
+let monitoringPaused = false;
+let wakeController = null;
 
-/** Name the connected station in the top bar. */
 function showDevice(info) {
-  if (!info) {
-    $('deviceName').textContent = 'No station';
-    $('deviceDetail').textContent = 'nothing connected';
-    return;
-  }
-  $('deviceName').textContent = info.modelName;
-  $('deviceDetail').textContent = `#${info.serialNumber} · code ${info.code} · ${info.modeName}`;
+  $('deviceName').textContent = info?.modelName ?? 'No station';
+  $('deviceDetail').textContent = info ? `#${info.serialNumber} · code ${info.code} · ${info.modeName}` : 'nothing read';
+  $('targetIdentity').textContent = info ? `${info.modelName} · #${info.serialNumber}` : 'Station not read';
 }
 
-async function refreshFacts() {
+function showTarget() {
+  const target = station?.target ?? 'direct';
+  for (const radio of document.querySelectorAll('input[name="target"]')) radio.checked = radio.value === target;
+  $('targetDescription').textContent = target === 'remote' ? 'Remote: the station on the coupling stick' : 'Direct: the station connected by cable';
+}
+
+function renderFacts(id, rows) {
+  $(id).replaceChildren(...rows.map(([label, value]) => {
+    const row = document.createElement('div');
+    const dt = document.createElement('dt');
+    const dd = document.createElement('dd');
+    dt.textContent = label;
+    dd.textContent = String(value);
+    row.append(dt, dd);
+    return row;
+  }));
+}
+
+async function refreshFacts({ resetDraft = false } = {}) {
   if (!station) return;
   const info = await station.readInfo();
-  lastInfo = info;
-  showPunchMode();
-  showDevice(info);
   const offset = await station.getClockOffset();
-
+  lastInfo = info;
+  station.autoRead = info.mode === MODE.READOUT && info.extendedProtocol;
+  targetReady = true;
+  healthy = true;
+  showDevice(info);
+  showTarget();
   setCircle(info.code);
-  ui.resultsHeading.textContent =
-    info.mode === MODE.READOUT ? 'Cards read' : `Punches at control ${info.code}`;
-
-  const rows = [
-    ['Control code', info.code],
-    ['Mode', info.modeName],
-    ['Model', info.modelName],
-    ['Serial number', info.serialNumber],
-    ['Firmware', info.firmware],
-    ['Battery', `${info.voltage.toFixed(2)} V`],
-    ['Battery used', `${info.batteryUsedPercent.toFixed(1)} %`],
+  const clock = offset === null ? 'unreadable' : `${(offset / 1000).toFixed(2)} s`;
+  $('clockDifference').textContent = `Clock difference: ${clock}`;
+  $('lastRead').textContent = `Last read: ${new Date().toLocaleTimeString()}`;
+  renderFacts('facts', [
+    ['Operating mode', info.modeName], ['Control code', info.code],
+    ['Model', info.modelName], ['Serial number', info.serialNumber], ['Firmware', info.firmware],
+    ['Battery', `${info.voltage.toFixed(2)} V`], ['Battery used', `${info.batteryUsedPercent.toFixed(1)} %`],
     ['Memory', `${info.memorySizeKb} kB${info.memoryOverflow ? ' (full)' : ''}`],
-    ['Stays awake for', info.activeTime],
-    ['Protocol', info.extendedProtocol ? 'Extended' : 'Legacy'],
-    ['Sends punches live', info.autoSend ? 'Yes' : 'No'],
-    ['Clock difference', offset === null ? 'unreadable' : `${(offset / 1000).toFixed(2)} s`],
-    ['Beeps on punch', info.audibleFeedback ? 'Yes' : 'No'],
+    ['Awake time', info.activeTime], ['Protocol', info.extendedProtocol ? 'Extended' : 'Legacy'],
+    ['Auto-send', info.autoSend ? 'On' : 'Off'], ['Handshake', station.protoConfig.handshake ? 'On' : 'Off'],
+    ['Clock difference', clock], ['Beeps on punch', info.audibleFeedback ? 'Yes' : 'No'],
     ['Flashes on punch', info.opticalFeedback ? 'Yes' : 'No'],
-    ['Built', info.buildDate],
-    ['Battery fitted', info.batteryDate],
-    ['Battery capacity', `${info.batteryCapacityMah} mAh`],
-    ['Mode byte', `0x${info.mode.toString(16).padStart(2, '0')}`],
-    ['Protocol byte', `0x${info.protocolByte.toString(16).padStart(2, '0')}`],
-    ['Feedback byte', `0x${info.feedbackByte.toString(16).padStart(2, '0')}`],
-  ];
-
-  $('toggleProtocol').textContent = info.extendedProtocol
-    ? 'Switch to legacy protocol'
-    : 'Switch to extended protocol';
-
-  ui.facts.replaceChildren(
-    ...rows.map(([label, value]) => {
-      const row = document.createElement('div');
-      const dt = document.createElement('dt');
-      dt.textContent = label;
-      const dd = document.createElement('dd');
-      dd.textContent = String(value);
-      row.append(dt, dd);
-      return row;
-    })
-  );
-
-  if (info.voltage < 3.1) {
-    setStatus('bad', `Battery is very low at ${info.voltage.toFixed(2)} V`);
-  } else if (info.voltage < 3.2) {
-    setStatus('warn', `Battery is getting low at ${info.voltage.toFixed(2)} V`);
+  ]);
+  renderFacts('technicalFacts', [
+    ['Built', info.buildDate], ['Battery fitted', info.batteryDate], ['Battery capacity', `${info.batteryCapacityMah} mAh`],
+    ...[['Mode byte', info.mode], ['Protocol byte', info.protocolByte], ['Feedback byte', info.feedbackByte]]
+      .map(([label, value]) => [label, `0x${value.toString(16).padStart(2, '0')}`]),
+  ]);
+  if (resetDraft || !baseline) {
+    baseline = configuration(info, station.protoConfig);
+    baselineIdentity = { ...info, target: station.target };
+    fillForm(baseline);
   }
+  updateConfiguration();
+  if (info.voltage < 3.2) setStatus('warn', `Battery is low at ${info.voltage.toFixed(2)} V`);
 }
 
 function setCircle(code) {
-  ui.circle.classList.toggle('idle', code === null || code === undefined);
-  ui.circleText.textContent = code === null || code === undefined ? '–' : String(code);
+  ui.circle.classList.toggle('idle', code == null);
+  ui.circleText.textContent = code == null ? '–' : String(code);
 }
-
 function setStatus(kind, text) {
   ui.status.className = `status ${kind}`.trim();
   ui.status.textContent = text;
 }
-
-function setControlsEnabled(enabled) {
-  for (const id of [
-    'beep', 'syncClock', 'readBackup', 'eraseBackup', 'saveSysval', 'powerOff',
-    'detectCard', 'setCode', 'codeInput', 'fbBeeper', 'fbLamp',
-    'activeInput', 'setActive', 'toggleProtocol', 'powerOffRemote',
-  ]) {
-    $(id).disabled = !enabled;
-  }
-  $('modeSelect').disabled = !enabled;
-  for (const radio of document.querySelectorAll('input[name="target"]')) {
-    radio.disabled = !enabled;
-  }
-  for (const radio of document.querySelectorAll('input[name="punchMode"]')) {
-    radio.disabled = !enabled;
-  }
-  $('readRemote').disabled = !enabled;
-
-  ui.disconnect.disabled = !enabled;
-  ui.connect.disabled = enabled || !support.any;
-  ui.connectUsb.disabled = enabled || !support.webUsb;
-  ui.simulate.disabled = enabled;
+function updateHealth({ healthy: responding, lastResponse }) {
+  healthy = responding;
+  $('healthState').textContent = responding ? 'Station responding' : 'Station not responding';
+  $('healthState').dataset.health = responding ? 'good' : 'bad';
+  $('lastResponse').textContent = `Last response: ${lastResponse ? lastResponse.toLocaleTimeString() : '—'}`;
+  setControlsEnabled();
 }
-
-// ------------------------------------------------- operating mode and target
-
-/**
- * Show what the station is doing, and which station that is.
- *
- * The dropdown is driven from the station, never the other way round, so one
- * reconfigured elsewhere shows up as it really is rather than as whatever was
- * last picked here.
- */
-function showMode() {
-  $('currentMode').textContent = station?.modeName ?? 'unknown';
-  $('modeTarget').textContent =
-    station?.target === 'remote' ? 'the station on the stick' : 'the cabled station';
-
-  const select = $('modeSelect');
-  const siac = station?.siacFunction ?? null;
-  const mode = station?.mode ?? null;
-  let value = '';
-
-  if (siac) {
-    const match = SIAC_FUNCTIONS.find((f) => f.name === siac);
-    if (match) value = `siac:${match.key}`;
-  } else if (mode !== null) {
-    // Beacon modes have two encodings; both pick the same entry.
-    for (const [name, base] of Object.entries(MODE_BY_NAME)) {
-      if (mode === base || mode === BEACON_OLD_TO_NEW[base]) {
-        value = `mode:${name}`;
-        break;
-      }
-    }
-  }
-
-  select.value = value;
-  // A mode with no entry (an unrecognised SIAC pair, say) selects nothing
-  // rather than pointing at the wrong one.
-  if (select.value !== value) select.selectedIndex = -1;
-}
-
-on('modeSelect', 'change', (event) =>
-  run(async () => {
-    const [kind, key] = event.target.value.split(':');
-
-    if (kind === 'siac') {
-      const result = await station.setSiacFunction(key);
-      await refreshFacts();
-      write(
-        'tx',
-        `${result.name}: mode 0x${result.mode.toString(16).padStart(2, '0')}, ` +
-          `control code ${result.code}`
-      );
-    } else {
-      const accepted = await station.setOperatingMode(key);
-      await refreshFacts();
-      const note =
-        accepted === MODE_BY_NAME[key]
-          ? ''
-          : ` (station wanted the newer 0x${accepted.toString(16)} form)`;
-      write('tx', `mode is now ${station.modeName}${note}`);
-    }
-
-    showFeedback();
-  }).then(showMode, showMode)
-);
-
-/** Move the radio back to where the hardware actually is. */
-function showTarget() {
-  const current = station?.target ?? 'direct';
-  const radio = document.querySelector(`input[name="target"][value="${current}"]`);
-  if (radio) radio.checked = true;
-}
-
-for (const radio of document.querySelectorAll('input[name="target"]')) {
-  radio.addEventListener('change', async () => {
-    if (!station) return;
-    station.addEventListener('waking', trackWaking);
-    try {
-      await station.setTarget(radio.value);
-      write(
-        'tx',
-        radio.value === 'remote'
-          ? 'commands now go to the station on the coupling stick'
-          : 'commands now go to the cabled station'
-      );
-
-      // A station on the stick is asleep, and reading it cold would just fail.
-      if (radio.value === 'remote') {
-        const awake = await station.wake({ signal: wakeAbort() });
-        if (!awake) throw new Error('The station on the stick never answered. Is one there?');
-        write('rx', 'the remote station is awake');
-      }
-
-      // Anything cached describes the other station, so read it again.
-      await refreshFacts();
-      showMode();
-    } catch (error) {
-      // A station that cannot relay leaves the radio lying about the target.
-      showTarget();
-      fail(error);
-    } finally {
-      station.removeEventListener('waking', trackWaking);
-      clearWaking();
-      $('cancelWake').hidden = true;
-    }
+function startMonitoring() {
+  monitor?.stop();
+  monitoringPaused = false;
+  monitor = monitorStation(station, {
+    isIdle: () => !operation && !monitoringPaused,
+    onStatus: updateHealth,
+    onBusyChange: () => setControlsEnabled(),
   });
 }
 
-/**
- * Show how far along the wake is.
- *
- * A station on the stick takes tens of seconds to rouse -- 11s and 22.8s on
- * the two measured here -- so without this the page looks hung.
- */
-function trackWaking(event) {
-  const { attempts, elapsed, timeout } = event.detail;
-  const bar = ui.progress.firstElementChild;
-  ui.progress.hidden = false;
-  bar.style.width = `${Math.min(100, Math.round((elapsed / timeout) * 100))}%`;
-  setStatus('warn', `Waking the remote station… ${Math.round(elapsed / 1000)}s, ${attempts} tries`);
+function readForm() {
+  return {
+    mode: $('modeSelect').value, code: $('codeInput').value === '' ? NaN : Number($('codeInput').value),
+    transfer: $('transferSelect').value, extended: $('extendedProtocol').checked,
+    audible: $('fbBeeper').checked, optical: $('fbLamp').checked,
+    active: $('activeInput').value === '' ? NaN : Number($('activeInput').value),
+  };
+}
+function fillForm(value) {
+  const select = $('modeSelect');
+  select.querySelectorAll('option[data-unknown]').forEach(o => o.remove());
+  if (![...select.options].some(o => o.value === value.mode)) {
+    const option = document.createElement('option');
+    option.value = value.mode;
+    option.textContent = `Reported mode: ${lastInfo?.modeName ?? value.mode}`;
+    option.dataset.unknown = 'true';
+    select.append(option);
+  }
+  select.value = value.mode;
+  $('codeInput').value = value.code;
+  $('transferSelect').value = value.transfer;
+  $('extendedProtocol').checked = value.extended;
+  $('fbBeeper').checked = value.audible;
+  $('fbLamp').checked = value.optical;
+  $('activeInput').value = value.active;
+}
+function hasDraft() {
+  return baseline && changes(baseline, readForm()).length > 0;
+}
+function valueLabel(key, value) {
+  if (key === 'mode') return modeOptions.find(o => o.key === value)?.label ?? value;
+  if (key === 'transfer') return { handshake: 'Handshake; auto-send off', autosend: 'Auto-send; handshake off', custom: 'Reported custom combination' }[value];
+  return typeof value === 'boolean' ? (value ? 'On' : 'Off') : String(value);
 }
 
-function clearWaking() {
-  ui.progress.hidden = true;
-  ui.progress.firstElementChild.style.width = '0';
+function updateConfiguration() {
+  if (!baseline) { setControlsEnabled(); return; }
+  const draft = readForm();
+  const rules = capabilities(draft.mode, lastInfo);
+  $('modeNote').textContent = rules.note;
+  $('codeNote').textContent = rules.codeEditable ? '1 to 1023' : 'Fixed by the SIAC function.';
+  $('transferNote').textContent = rules.forcedPrintout ? 'Auto-send is required by this firmware.'
+    : draft.transfer === 'custom' ? 'This station reports a different combination of protocol bits. It is preserved unless you choose a new data-transfer setting.'
+    : rules.cardReadout ? (draft.extended ? 'Complete card readout is available in this app.' : 'Enable extended protocol to read cards in this app.')
+    : 'This does not enable complete card readout. Auto-send output depends on the mode and hardware. Remote stations may need SRR hardware for live data.';
+  const pending = changes(baseline, draft);
+  $('draftState').textContent = pending.length ? `${pending.length} pending change${pending.length === 1 ? '' : 's'} — ${$('targetIdentity').textContent}` : 'No changes';
+  $('changeSummary').replaceChildren(...pending.map(key => {
+    const item = document.createElement('li');
+    item.textContent = `${fieldLabels[key]}: ${valueLabel(key, baseline[key])} → ${valueLabel(key, draft[key])}`;
+    return item;
+  }));
+  $('configurationError').textContent = validateConfiguration(baseline, draft, lastInfo);
+  setControlsEnabled();
 }
 
-on('readRemote', 'click', () =>
-  run(async () => {
-    station.addEventListener('waking', trackWaking);
-    try {
-      const info = await station.withRemote(() => station.readInfo(), { signal: wakeAbort() });
-      write(
-        'rx',
-        `remote station: ${info.modelName}, serial ${info.serialNumber}, ${info.modeName} mode, code ${info.code}`
-      );
-      showRemoteFacts(info);
-      setStatus('live', `Read ${info.modelName} on the coupling stick`);
-    } finally {
-      station.removeEventListener('waking', trackWaking);
-      clearWaking();
+function setControlsEnabled() {
+  const connected = !!station?.isOpen;
+  const idle = connected && !operation && !monitor?.checking && !station?.busy;
+  const enabled = idle && targetReady && healthy && !monitoringPaused;
+  const draft = baseline ? readForm() : null;
+  const rules = capabilities(draft?.mode ?? '', lastInfo ?? {});
+  for (const id of ['modeSelect', 'codeInput', 'fbBeeper', 'fbLamp', 'activeInput', 'extendedProtocol', 'transferSelect',
+    'beep', 'syncClock', 'saveSysval', 'powerOff', 'eraseBackup']) $(id).disabled = !enabled;
+  $('codeInput').disabled = !enabled || !rules.codeEditable;
+  $('transferSelect').disabled = !enabled || (rules.forcedPrintout && draft?.transfer === 'autosend');
+  $('transferSelect').querySelector('[value="handshake"]').disabled = rules.forcedPrintout;
+  $('extendedProtocol').disabled = !enabled || (rules.forcedPrintout && draft?.extended);
+  $('applyChanges').disabled = !enabled || !hasDraft() || !!validateConfiguration(baseline, draft, lastInfo);
+  $('discardChanges').disabled = operation || !hasDraft();
+  $('refreshOverview').disabled = !idle;
+  const actual = capabilities(lastInfo ? modeKey(lastInfo) : '', lastInfo ?? {});
+  $('detectCard').disabled = !enabled || !actual.cardReadout || !lastInfo?.extendedProtocol || !!lastInfo?.autoSend;
+  $('readBackup').disabled = !enabled || !actual.backup;
+  $('backupNote').textContent = actual.backup ? 'Read and download recorded punches from the selected station.' : 'Backup punch decoding is unavailable for this operating mode.';
+  $('dataWorkflow').textContent = !lastInfo ? 'Read the selected station to see its data workflow.'
+    : !lastInfo.extendedProtocol ? 'Legacy protocol: live data decoding is unavailable in this app. Existing results remain below.'
+    : actual.cardReadout ? (lastInfo.autoSend ? 'Auto-send card data appears here. Existing results are retained.' : 'Insert a card, or read the card already in the station.')
+    : 'Received live punches appear here when the station emits them. Complete card readout requires Readout mode. Existing results are retained.';
+  for (const radio of document.querySelectorAll('input[name="target"]')) {
+    radio.disabled = !idle || (radio.value === 'remote' && station?.target === 'direct' && lastInfo && !lastInfo.extendedProtocol);
+    radio.title = radio.value === 'remote' && station?.target === 'direct' && lastInfo && !lastInfo.extendedProtocol
+      ? 'Enable extended protocol on the cabled station to use Remote.' : '';
+  }
+  ui.disconnect.disabled = !station || operation || !!monitor?.checking;
+  ui.connect.disabled = !!station || !support.any;
+  ui.connectUsb.disabled = !!station || !support.webUsb;
+  ui.simulate.disabled = !!station;
+}
 
-      // withRemote has already put us back on the cable, but everything on
-      // screen still describes the station on the stick. Re-read the cabled
-      // one so the mode and facts panels agree with where commands now go.
-      showTarget();
-      await refreshFacts().catch(() => {});
-      showMode();
-      showFeedback();
+on('configurationForm', 'input', (event) => {
+  if (!baseline) return;
+  if (event.target.id === 'modeSelect') {
+    const rule = capabilities($('modeSelect').value, lastInfo);
+    if (rule.fixedCode != null) $('codeInput').value = rule.fixedCode;
+    if (rule.forcedPrintout) {
+      $('transferSelect').value = 'autosend';
+      $('extendedProtocol').checked = true;
     }
-  })
-);
-
-/** Let the user call off a wake that is going nowhere. */
-let wakeController = null;
-function wakeAbort() {
-  wakeController = new AbortController();
-  $('cancelWake').hidden = false;
-  return wakeController.signal;
-}
-
-on('cancelWake', 'click', () => {
-  wakeController?.abort();
-  $('cancelWake').hidden = true;
-  write('err', 'wake cancelled');
+  }
+  updateConfiguration();
+});
+on('discardChanges', 'click', () => {
+  if (!baseline) return;
+  if (lastInfo && targetReady) {
+    baseline = configuration(lastInfo, station.protoConfig);
+    baselineIdentity = { ...lastInfo, target: station.target };
+  }
+  fillForm(baseline);
+  updateConfiguration();
+});
+on('configurationForm', 'submit', (event) => {
+  event.preventDefault();
+  run(async () => {
+    const desired = readForm();
+    const identity = baselineIdentity;
+    const expected = changes(baseline, desired);
+    const applied = [];
+    let failure;
+    station.autoRead = false;
+    try {
+      await applyConfiguration(station, baseline, desired, identity, label => applied.push(label));
+    } catch (error) { failure = error; }
+    try {
+      await refreshFacts({ resetDraft: true });
+    } catch (error) {
+      targetReady = false;
+      throw new Error(`Could not read back settings. ${applied.length ? `Completed: ${applied.join(', ')}. ` : ''}Refresh before applying again. ${failure?.message ?? error.message}`);
+    }
+    if (lastInfo.serialNumber !== identity.serialNumber || station.target !== identity.target) {
+      throw new Error('The station changed. Its current settings have been loaded; the previous station’s draft was not carried over.');
+    }
+    const mismatches = expected.filter(key => baseline[key] !== desired[key]);
+    if (failure || mismatches.length) {
+      fillForm(desired);
+      updateConfiguration();
+      throw new Error(`${failure?.message ?? `Station did not accept: ${mismatches.map(k => fieldLabels[k]).join(', ')}.`} ${applied.length ? `Completed writes: ${applied.join(', ')}. ` : ''}Actual values are in Overview; remaining changes are kept for review.`);
+    }
+    setStatus('live', 'Changes applied and read back from the station');
+  });
 });
 
-/** The remote station's details, kept apart from the cabled one's. */
-function showRemoteFacts(info) {
-  const list = $('remoteFacts');
-  list.replaceChildren();
-  const rows = [
-    ['Read at', new Date().toLocaleTimeString()],
-    ['Model', info.modelName],
-    ['Serial number', String(info.serialNumber)],
-    ['Control code', String(info.code)],
-    ['Mode', info.modeName],
-    ['Mode byte', `0x${info.mode.toString(16).padStart(2, '0')}`],
-    ['Firmware', info.firmware],
-    ['Battery', `${info.voltage.toFixed(2)} V`],
-  ];
-  for (const [label, value] of rows) {
-    const row = document.createElement('div');
-    const dt = document.createElement('dt');
-    dt.textContent = label;
-    const dd = document.createElement('dd');
-    dd.textContent = value;
-    row.append(dt, dd);
-    list.append(row);
-  }
-  $('remotePanel').hidden = false;
-}
+on('refreshOverview', 'click', () => run(async () => {
+  if (monitoringPaused) { monitoringPaused = false; startMonitoring(); }
+  if (station.target === 'remote' && !targetReady) await wakeSelected();
+  await refreshFacts({ resetDraft: !hasDraft() });
+  setStatus('live', 'Station settings refreshed');
+}, { requireReady: false }));
 
-// ------------------------------------------------------ code, feedback, awake
-
-on('setCode', 'click', () =>
-  run(async () => {
-    const code = Number($('codeInput').value);
-    await station.setStationCode(code);
-    await refreshFacts();
-    showFeedback();
-    // Read it back rather than echoing what was asked for: codes above 255
-    // split across two bytes, so a mismatch here is worth seeing.
-    write('tx', `control code is now ${lastInfo?.code ?? code}`);
-  })
-);
-
-/** Tick boxes reflect the station, and changing one writes it straight away. */
-function showFeedback() {
-  const info = lastInfo;
-  if (!info) return;
-  $('fbBeeper').checked = info.audibleFeedback;
-  $('fbLamp').checked = info.opticalFeedback;
-  $('codeInput').value = String(info.code);
-  $('activeInput').value = String(info.activeTimeMinutes);
-}
-
-async function applyFeedback() {
-  await station.setFeedback({
-    audible: $('fbBeeper').checked,
-    optical: $('fbLamp').checked,
-  });
-  await refreshFacts();
-  write(
-    'tx',
-    `feedback: beeper ${$('fbBeeper').checked ? 'on' : 'off'}, ` +
-      `lamp ${$('fbLamp').checked ? 'on' : 'off'}`
-  );
-}
-
-on('fbBeeper', 'change', () => run(applyFeedback));
-on('fbLamp', 'change', () => run(applyFeedback));
-
-on('setActive', 'click', () =>
-  run(async () => {
-    const minutes = Number($('activeInput').value);
-    await station.setActiveTime(minutes);
-    await refreshFacts();
-    write('tx', `stays awake for ${minutes} minutes`);
-  })
-);
-
-on('toggleProtocol', 'click', () =>
-  run(async () => {
-    const toExtended = !lastInfo?.extendedProtocol;
-    await station.setExtendedProtocol(toExtended);
-    await refreshFacts();
-    write('tx', `protocol is now ${toExtended ? 'extended' : 'legacy'}`);
-  })
-);
-
-on('powerOffRemote', 'click', () =>
-  run(async () => {
-    await station.powerOffRemote();
-    write('rx', 'remote station acknowledged the switch-off command');
-    setStatus('warn', 'Remote station acknowledged switch-off');
-  })
-);
-
-// ------------------------------------------------------------- punch handling
-
-/** Reflect the station's protocol bits in the radios. */
-function showPunchMode() {
-  const autosend = station?.protoConfig?.autoSend ?? false;
-  const value = autosend ? 'autosend' : 'readout';
-  const radio = document.querySelector(`input[name="punchMode"][value="${value}"]`);
-  if (radio) radio.checked = true;
-  $('punchModeNote').textContent = autosend
-    ? station?.mode === MODE.READOUT
-      ? 'The station sends card data automatically. Complete cards appear under Cards read.'
-      : 'Punches arrive as they happen. Select Readout mode to receive complete cards.'
-    : 'Cards are read when inserted. Live punches are off while this is on.';
-}
-
-for (const radio of document.querySelectorAll('input[name="punchMode"]')) {
-  radio.addEventListener('change', () =>
+for (const radio of document.querySelectorAll('input[name="target"]')) {
+  radio.addEventListener('change', () => {
+    const target = radio.value;
+    if (hasDraft()) {
+      showTarget();
+      showTab('configure');
+      setStatus('warn', 'Apply or discard your changes before switching stations');
+      return;
+    }
     run(async () => {
-      // setAutoSend flips handshake to the opposite, which is what the
-      // hardware requires -- the two cannot both be on.
-      await station.setAutoSend(radio.value === 'autosend');
-      showPunchMode();
-      write('tx', `punch handling: ${radio.value}`);
-    })
-  );
+      monitor?.stop();
+      targetReady = false;
+      healthy = false;
+      lastInfo = null;
+      baseline = null;
+      showDevice(null);
+      ui.facts.replaceChildren();
+      $('technicalFacts').replaceChildren();
+      $('lastRead').textContent = 'Reading selected station…';
+      $('lastResponse').textContent = 'Last response: —';
+      $('healthState').textContent = 'Reading selected station…';
+      station.autoRead = false;
+      try {
+        await station.setTarget(target);
+        if (target === 'remote') await wakeSelected();
+        await refreshFacts({ resetDraft: true });
+        setStatus('live', 'Selected station read and ready');
+      } finally {
+        showTarget();
+        startMonitoring();
+        if (targetReady) updateHealth({ healthy: true, lastResponse: new Date() });
+        else {
+          $('lastRead').textContent = 'Station not read — refresh or switch target';
+          updateHealth({ healthy: false, lastResponse: null });
+        }
+        station.autoRead = targetReady && lastInfo?.mode === MODE.READOUT && lastInfo.extendedProtocol;
+      }
+    }, { requireReady: false });
+  });
 }
+
+function trackWaking(event) {
+  const { attempts, elapsed, timeout } = event.detail;
+  ui.progress.hidden = false;
+  ui.progress.firstElementChild.style.width = `${Math.min(100, Math.round(elapsed / timeout * 100))}%`;
+  setStatus('warn', `Waking remote station… ${Math.round(elapsed / 1000)}s, ${attempts} tries`);
+}
+async function wakeSelected() {
+  wakeController = new AbortController();
+  $('cancelWake').hidden = false;
+  station.addEventListener('waking', trackWaking);
+  try {
+    if (!await station.wake({ signal: wakeController.signal })) throw new Error('Remote station did not answer. Check the coupling stick and refresh.');
+    if (wakeController.signal.aborted) throw new Error('Remote wake cancelled. Refresh to read the station.');
+  } finally {
+    station.removeEventListener('waking', trackWaking);
+    $('cancelWake').hidden = true;
+    ui.progress.hidden = true;
+    wakeController = null;
+  }
+}
+on('cancelWake', 'click', () => wakeController?.abort());
 
 on('detectCard', 'click', () =>
   run(async () => {
@@ -616,8 +575,7 @@ on('detectCard', 'click', () =>
   })
 );
 
-// Pick the station back up after a reload, before anyone has to click.
-reconnectSilently();
+
 
 // ------------------------------------------------------------- siac battery
 
@@ -689,8 +647,13 @@ on('syncClock', 'click', () =>
 
 on('powerOff', 'click', () =>
   run(async () => {
-    await station.powerOff();
-    setStatus('warn', 'The station was switched off');
+    monitoringPaused = true;
+    monitor?.stop();
+    station.autoRead = false;
+    $('healthState').textContent = 'Switching off · monitoring paused';
+    await station.sendCommand(CMD.OFF, [], { retries: 0 });
+    $('healthState').textContent = 'Switched off · monitoring paused';
+    setStatus('warn', 'Selected station switched off. Refresh to reconnect.');
   })
 );
 
@@ -738,12 +701,20 @@ on('saveSysval', 'click', () =>
   })
 );
 
-async function run(task) {
-  if (!station) return;
+async function run(task, { requireReady = true } = {}) {
+  if (!station || operation || monitor?.checking || station.busy || station.isCommunicating) return;
+  if (requireReady && (!targetReady || !healthy || monitoringPaused)) return;
+  operation = true;
+  setControlsEnabled();
   try {
     await task();
   } catch (error) {
     fail(error);
+    if (!$('panel-configure').hidden) $('configurationError').textContent = error.message;
+  } finally {
+    operation = false;
+    ui.progress.hidden = true;
+    setControlsEnabled();
   }
 }
 
@@ -751,7 +722,7 @@ async function run(task) {
 
 function addCard(card) {
   readCards.push(card);
-  showTab('cards'); // bring the readout into view rather than hiding it
+  if (!hasDraft() && !operation) showTab('cards');
   const article = document.createElement('article');
   article.className = 'readout';
 
@@ -1009,3 +980,7 @@ function scheduleSimulatedCards() {
   };
   setTimeout(next, 600);
 }
+
+// All state and event handlers are ready before reconnecting.
+setControlsEnabled();
+reconnectSilently();
